@@ -1,3 +1,4 @@
+import hashlib
 import io
 import json
 from types import SimpleNamespace
@@ -53,7 +54,7 @@ def test_patch_overlay_reconstructs_without_mutating_parent(workspace):
 
 def test_public_scoring_averages_samples_then_problems_then_benchmarks(workspace):
     root, _, config = workspace
-    tasks, names, full = local.public_examples(root, config)
+    tasks, names, full, _ = local.public_examples(root, config)
     assert [t['seed'] for t in tasks] == [1000, 1001, 1000, 1000]
     answers = iter(['yes', 'no', 'yes', 'yes'])
     runner = SimpleNamespace(generate=lambda *a: {'text': next(answers), 'tokens': 3, 'generation_seconds': 1, 'truncated': False})
@@ -137,3 +138,59 @@ def test_leaderboard_version_download_is_used_for_inference(workspace, monkeypat
     result = CliRunner().invoke(main.app, ['run', 'Hi', '--workspace', str(root), '--version', selected, '--json'])
     assert result.exit_code == 0, result.output
     assert json.loads(result.stdout)['source_version_id'] == selected
+
+
+@pytest.fixture
+def fake_runner(monkeypatch):
+    class FakeRunner:
+        details = {'device': 'cpu'}
+        def __init__(self, *args):
+            pass
+        def generate(self, *args):
+            return {'text': 'yes', 'tokens': 2, 'generation_seconds': .1, 'truncated': False}
+    monkeypatch.setattr(local, 'Runner', FakeRunner)
+
+
+def test_load_validation(workspace):
+    root, _, config = workspace
+    path = root / 'custom.json'
+    raw = json.dumps({'c': [{'id': 'c1', 'prompt': 'P', 'answer': 'yes'}]}).encode()
+    path.write_bytes(raw)
+    data, names, sha = local.load_validation(path)
+    assert names == ['c'] and sha == hashlib.sha256(raw).hexdigest() and list(data) == ['c']
+    tasks, _, full, _ = local.public_examples(root, config, validation_file=path)
+    assert len(tasks) == 1 and full is False
+    for content, message in [('{}', 'example objects'), ('{"b": ["text"]}', 'example objects'), ('nope', 'Cannot read'),
+                             ('{"c": [{"id": "c1", "prompt": "P", "answer": "yes", "scorer": "nope"}]}', 'Unsupported scorer'),
+                             ('{"c": [{"prompt": "P", "answer": "yes"}]}', 'need id')]:
+        path.write_text(content)
+        with pytest.raises(ValueError, match=message):
+            local.public_examples(root, config, validation_file=path)
+    path.write_bytes(raw)
+    with pytest.raises(ValueError, match='changed'):
+        local.load_validation(path, {**config, 'validation_names': ['c']})
+
+
+def test_cli_custom_validation_file(workspace, fake_runner):
+    root, _, config = workspace
+    path = root / 'custom.json'
+    path.write_text(json.dumps({'c': [{'id': f'c{i}', 'prompt': 'P', 'answer': 'yes'} for i in range(2)],
+                                'd': [{'id': 'd1', 'prompt': 'P', 'answer': 'yes'}]}))
+    runner = CliRunner()
+    args = ['evaluate', '--workspace', str(root), '--max-new-tokens', '4']
+    default = root / 'default.json'
+    result = runner.invoke(main.app, args + ['--output', str(default)])
+    assert result.exit_code == 0, result.output
+    assert json.loads(default.read_text())['validation_file'].endswith('validation.json')
+    (root / 'validation.json').write_text((root / 'validation.json').read_text() + ' ')
+    assert runner.invoke(main.app, args + ['--output', str(root / 'x.json')]).exit_code == 1
+    output = root / 'custom-result.json'
+    result = runner.invoke(main.app, args + ['--validation', str(path), '--benchmark', 'c', '--limit', '1', '--output', str(output)])
+    assert result.exit_code == 0, result.output
+    assert '1 generations' in result.output
+    report = json.loads(output.read_text())
+    assert report['validation_file'] == str(path.resolve())
+    assert report['validation_sha256'] != config['validation_sha256']
+    assert report['validation_sha256'] == hashlib.sha256(path.read_bytes()).hexdigest()
+    assert report['full_validation_set'] is False
+    assert report['validation_benchmarks'] == {'c': 100}

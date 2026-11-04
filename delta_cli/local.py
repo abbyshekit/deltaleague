@@ -1,5 +1,6 @@
 """Offline text inference and public validation; no platform or private-data imports."""
 from contextlib import contextmanager
+import hashlib
 from importlib.metadata import version
 import json
 import os
@@ -140,14 +141,33 @@ class Runner:
                 'generation_seconds': time.monotonic() - start}
 
 
-def public_examples(workspace, config, benchmark=None, limit=None):
-    path = workspace / 'validation.json'
-    if file_hash(path) != config['validation_sha256']:
+def load_validation(path, config=None):
+    """Read a validation file; with a workspace config, require its recorded hash and inventory."""
+    try:
+        raw = Path(path).read_bytes()
+    except OSError as exc:
+        raise ValueError(f'Cannot read validation file {path}: {exc}') from exc
+    sha = hashlib.sha256(raw).hexdigest()
+    if config is not None and sha != config['validation_sha256']:
         raise ValueError('Public validation data changed; initialize a fresh workspace.')
-    data = json.loads(path.read_text())
+    try:
+        data = json.loads(raw)
+    except ValueError as exc:
+        raise ValueError(f'Cannot read validation file {path}: {exc}') from exc
+    if not isinstance(data, dict) or not data or not all(
+            isinstance(v, list) and all(isinstance(e, dict) for e in v) for v in data.values()):
+        raise ValueError('Validation file must map benchmark names to lists of example objects.')
+    if config is None:
+        return data, list(data), sha
     names = config['validation_names']
     if set(data) != set(names) or not names:
         raise ValueError('Public validation benchmark inventory mismatch.')
+    return data, names, sha
+
+
+def public_examples(workspace, config, benchmark=None, limit=None, validation_file=None):
+    data, names, sha = load_validation(validation_file or workspace / 'validation.json',
+                                       None if validation_file else config)
     if benchmark and benchmark not in names:
         raise ValueError('Unknown benchmark; choose from: ' + ', '.join(names))
     selected = [benchmark] if benchmark else names
@@ -156,6 +176,8 @@ def public_examples(workspace, config, benchmark=None, limit=None):
         if not data[name]:
             raise ValueError(f'Empty benchmark: {name}')
         for index, example in enumerate(data[name][:limit] if limit else data[name]):
+            if not all(isinstance(example.get(k), str) and example[k] for k in ('id', 'prompt')) or 'answer' not in example:
+                raise ValueError('Validation examples need id, prompt and answer.')
             scorer = example.get('scorer', 'exact')
             if scorer not in {'exact', 'choice', 'math', 'ifeval'}:
                 raise ValueError(f'Unsupported scorer: {scorer}')
@@ -170,7 +192,8 @@ def public_examples(workspace, config, benchmark=None, limit=None):
             for sample in range(samples):
                 rows.append({'benchmark': name, 'example_index': index, 'sample': sample,
                              'seed': 1000 + sample, 'example': example})
-    return rows, selected, not benchmark and all(limit is None or limit >= len(v) for v in data.values())
+    full = validation_file is None and not benchmark and all(limit is None or limit >= len(v) for v in data.values())
+    return rows, selected, full, sha
 
 
 def evaluate(runner, tasks, generation, stream, progress):

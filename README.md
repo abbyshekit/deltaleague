@@ -53,6 +53,8 @@ delta evaluate --weights edited.safetensors --limit 2 --max-new-tokens 256 --out
 delta run "What is 2 + 2?" --version VERSION_ID --no-thinking
 ```
 
+`--validation FILE` evaluates a custom item file in the same format; see LOCAL.md.
+
 Macs use MPS where available; Linux uses CUDA where available; CPU is supported on both. Local scores are advisory. See [LOCAL.md](LOCAL.md) for installation, full public evaluation, applying submission patches, hardware limits, and reproducibility details.
 
 See [installation channels](DISTRIBUTION.md) for npm/npx and Homebrew availability.

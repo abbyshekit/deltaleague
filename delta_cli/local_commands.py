@@ -79,11 +79,13 @@ def evaluate(workspace: Path = Path('.'), version: str | None = None,
              benchmark: str | None = None, limit: int | None = typer.Option(None, min=1),
              max_new_tokens: int | None = typer.Option(None, min=1),
              thinking: bool | None = typer.Option(None, '--thinking/--no-thinking'),
+             validation_file: Path | None = typer.Option(None, '--validation'),
              output: Path = Path('local-results.json')):
-    """Evaluate public validation. --limit caps examples per benchmark; output is never an official score."""
+    """Evaluate public validation, or a custom item file with --validation. --limit caps examples per benchmark; output is never an official score."""
     try:
         root, _, config, _ = local.read_workspace(workspace)
-        tasks, names, full = local.public_examples(root, config, benchmark, limit)
+        path = (validation_file or root / 'validation.json').resolve()
+        tasks, names, full, sha = local.public_examples(root, config, benchmark, limit, path if validation_file else None)
         output = output.resolve()
         generations = output.with_suffix('.generations.jsonl')
         if output.exists() or generations.exists():
@@ -97,7 +99,8 @@ def evaluate(workspace: Path = Path('.'), version: str | None = None,
                     lambda index, total, name: typer.echo(f'[{index}/{total}] {name}', err=True))
             report = {**details, **result, 'complete': True, 'full_validation_set': full,
                       'selected_benchmarks': names, 'examples_per_benchmark_limit': limit,
-                      'validation_sha256': config['validation_sha256'], 'generations_file': str(generations),
+                      'validation_sha256': sha,
+                      'validation_file': str(path), 'generations_file': str(generations),
                       'note': 'Advisory local score. Hardware/backend differences affect results; this is not a verified leaderboard score.'}
             with output.open('x') as stream:
                 json.dump(report, stream, indent=2)

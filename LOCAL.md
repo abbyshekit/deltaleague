@@ -66,6 +66,14 @@ delta evaluate --output baseline-full.json
 delta evaluate --weights edited.safetensors --output edit-full.json
 ```
 
+To evaluate your own items (a held-out set, extra samples), pass `--validation FILE` in the `validation.json` format, where `scorer` is `exact`, `choice`, `math` or `ifeval` and `samples` defaults to 1:
+
+```json
+{"my-set": [{"id": "q1", "prompt": "What is 2 + 2?", "answer": "4", "scorer": "math", "samples": 2}]}
+```
+
+The report's `validation_sha256` is the hash of that file, `validation_file` records its path, and `full_validation_set` is false. `--benchmark` and `--limit` still apply.
+
 Full evaluation can be expensive locally: the starter configuration permits 32,768 generated tokens per example. The CLI prints the number of generations and upper token budget before loading the model. Use Ctrl-C to interrupt. Completed generation records remain in the JSONL file; no complete score report is written for an interrupted run. Choose a fresh output filename to rerun; automatic resume is not implemented.
 
 The JSON report contains per-benchmark scores, the equal-weight mean across selected benchmarks, per-example sample averaging, checkpoint hash, source version, validation hash, runtime versions, actual generation settings, coverage, and truncation statistics. A companion `*.generations.jsonl` contains answers and per-sample scores. Existing output files are never overwritten.
