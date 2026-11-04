@@ -1,0 +1,57 @@
+{
+  "local_only": true,
+  "model_id": "qwen35-08b-v1",
+  "config_id": "runtime-v5",
+  "source_version_id": "0ea62f40-7cd8-4d98-9ebb-484192fa05eb",
+  "artifact": {
+    "kind": "parent",
+    "weights_sha256": "04b1c301231dd422b8860db31311ab2721511346a32cb1e079c4c4e5f1fe4696"
+  },
+  "grid_sha256": "4f2e8207ad608a64c6e8c5f920f6b03ffa835d42d807c3ae449247c1c44dbc72",
+  "preregistered": false,
+  "cells_requested": [
+    "default",
+    "temp-0.6-pp-0.9"
+  ],
+  "cells": [
+    {
+      "name": "default",
+      "overrides": {},
+      "report": "ctrl-grid/default.json",
+      "validation_score": 16.666666666666668,
+      "validation_benchmarks": {
+        "arc_challenge": 0.0,
+        "gsm8k": 50.0,
+        "math500": 0.0
+      },
+      "truncation_rate": 1.0,
+      "output_tokens": 6144
+    },
+    {
+      "name": "temp-0.6-pp-0.9",
+      "overrides": {
+        "temperature": 0.6,
+        "presence_penalty": 0.9
+      },
+      "report": "ctrl-grid/temp-0.6-pp-0.9.json",
+      "validation_score": 33.333333333333336,
+      "validation_benchmarks": {
+        "arc_challenge": 50.0,
+        "gsm8k": 50.0,
+        "math500": 0.0
+      },
+      "truncation_rate": 0.8333333333333334,
+      "output_tokens": 5901
+    }
+  ],
+  "default_cell": "default",
+  "best_cell": "temp-0.6-pp-0.9",
+  "best_minus_default": 16.666666666666668,
+  "selected_benchmarks": [
+    "arc_challenge",
+    "gsm8k",
+    "math500"
+  ],
+  "examples_per_benchmark_limit": 2,
+  "note": "Advisory local score. Hardware/backend differences affect results; this is not a verified leaderboard score."
+}

@@ -1,0 +1,119 @@
+{
+  "baseline": {
+    "path": "ctrl-grid/temp-0.6-pp-0.9.json",
+    "source_version_id": "0ea62f40-7cd8-4d98-9ebb-484192fa05eb",
+    "artifact": {
+      "kind": "parent",
+      "weights_sha256": "04b1c301231dd422b8860db31311ab2721511346a32cb1e079c4c4e5f1fe4696"
+    },
+    "generation": {
+      "top_k": 20,
+      "top_p": 0.95,
+      "max_tokens": 1024,
+      "temperature": 0.6,
+      "max_model_len": 34816,
+      "enable_thinking": true,
+      "presence_penalty": 0.9
+    },
+    "validation_score": 33.333333333333336
+  },
+  "candidate": {
+    "path": "ctrl-alpha.json",
+    "source_version_id": "0ea62f40-7cd8-4d98-9ebb-484192fa05eb",
+    "artifact": {
+      "kind": "patch",
+      "weights_sha256": "39f294ea50ac7ef83ff0474cafef34abaf6ddbab34626e6f56b90a39db23c88b"
+    },
+    "generation": {
+      "top_k": 20,
+      "top_p": 0.95,
+      "max_tokens": 1024,
+      "temperature": 1.0,
+      "max_model_len": 34816,
+      "enable_thinking": true,
+      "presence_penalty": 1.5
+    },
+    "validation_score": 16.666666666666668
+  },
+  "model_id": "qwen35-08b-v1",
+  "config_id": "runtime-v5",
+  "validation_sha256": "98bcf107e11ee2105b2420f0b1b946d51eaa2f7b13881db3809f734ede9a3699",
+  "generation_differs": true,
+  "benchmarks": {
+    "arc_challenge": {
+      "n": 2,
+      "baseline_mean": 50.0,
+      "candidate_mean": 0.0,
+      "diff": -50.0,
+      "ci95": [
+        -100.0,
+        0.0
+      ],
+      "wins": 0,
+      "losses": 1,
+      "ties": 1,
+      "sign_test_p": 1.0,
+      "baseline_truncation_rate": 0.5,
+      "candidate_truncation_rate": 1,
+      "baseline_mean_tokens": 902.5,
+      "candidate_mean_tokens": 1024,
+      "run_worst_case_se": 35.35533905932737
+    },
+    "gsm8k": {
+      "n": 2,
+      "baseline_mean": 50.0,
+      "candidate_mean": 50.0,
+      "diff": 0.0,
+      "ci95": [
+        0.0,
+        0.0
+      ],
+      "wins": 0,
+      "losses": 0,
+      "ties": 2,
+      "sign_test_p": 1.0,
+      "baseline_truncation_rate": 1,
+      "candidate_truncation_rate": 1,
+      "baseline_mean_tokens": 1024,
+      "candidate_mean_tokens": 1024,
+      "run_worst_case_se": 35.35533905932737
+    },
+    "math500": {
+      "n": 2,
+      "baseline_mean": 0.0,
+      "candidate_mean": 0.0,
+      "diff": 0.0,
+      "ci95": [
+        0.0,
+        0.0
+      ],
+      "wins": 0,
+      "losses": 0,
+      "ties": 2,
+      "sign_test_p": 1.0,
+      "baseline_truncation_rate": 1,
+      "candidate_truncation_rate": 1,
+      "baseline_mean_tokens": 1024,
+      "candidate_mean_tokens": 1024,
+      "run_worst_case_se": 35.35533905932737
+    }
+  },
+  "overall": {
+    "baseline_mean": 33.333333333333336,
+    "candidate_mean": 16.666666666666668,
+    "diff": -16.666666666666668,
+    "ci95": [
+      -33.333333333333336,
+      0.0
+    ],
+    "run_worst_case_se": 20.41241452319315,
+    "wins": 0,
+    "losses": 1,
+    "ties": 5,
+    "sign_test_p": 1.0,
+    "separable": false
+  },
+  "resamples": 10000,
+  "seed": 0,
+  "note": "Advisory local comparison. Official validation and private test scores are authoritative."
+}

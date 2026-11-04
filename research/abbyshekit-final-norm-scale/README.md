@@ -30,9 +30,9 @@ These predictions are weak at n = 30 and n = 9; the experiment cannot separate s
 ## Controls
 Needs the CLI with `delta compare` and `delta grid` (#1, #2).
 - Logit linearity (`check_logits.py 1.6666667`, float32 on CPU, three prompts, last-position logits): max |edited − α·base| = 0.028–0.030 on logits of magnitude 24.6–25.2 (about 0.1%); median ratio edited/base 1.6676–1.6677 against the target 1.6667; argmax unchanged on all three. Effective per-entry gain after the bfloat16 cast: 1.6632–1.6716.
-- Against the parent (`delta compare`): filled after the run.
-- Against the decoding twin (`delta grid --grid grid-alpha.json`, cell `temp-0.6-pp-0.9`, then `delta compare`): filled after the run.
-- Scripted baseline: this edit is the scripted baseline; the published edit's reproduction (`examples/blog-reproduction`) is the comparison arm.
+- Against the parent (`delta compare results/grid-default.json results/alpha-patch.json`; MPS, float32, 2 items per benchmark, 1,024 output tokens, thinking on, 6 generations per run): parent 16.7, patch 16.7, difference 0.0 with CI [0, 0]; both truncate 6 of 6 generations at this budget. Advisory only: every thinking trace exceeds 1,024 tokens, so the quick set measures truncation, not answers.
+- Against the decoding twin (`delta grid --grid grid-alpha.json`, cell `temp-0.6-pp-0.9`, then `delta compare`): twin 33.3 with 5 of 6 truncated, patch 16.7 with 6 of 6; difference −16.7, CI [−33.3, 0], sign test p = 1.0, not separable. Under the same seeds 3 of the 6 generations are identical character for character and the other 3 diverge after 631, 1,114 and 1,247 characters: bfloat16 rounding of α·(1 + w) perturbs the logits by about 0.1%, and one flipped token changes the rest of the sample. Prediction 4's "same scores" was too strong at this budget; the logit-level check above is the equivalence evidence.
+- Scripted baseline: this edit is the scripted baseline; the published edit's reproduction (`examples/blog-reproduction`) is the comparison arm. At the same local budget it scores 0.0 with 6 of 6 truncated (`results/blog-edit.json`, `results/compare-parent-blog.json`).
 
 ## Reproduction
 From a fresh `delta competition init qwen35-08b-v1 --output experiment`, inside `experiment/`:
