@@ -162,3 +162,30 @@ def test_leaderboard_version_download_is_used_for_inference(workspace, monkeypat
     result = CliRunner().invoke(main.app, ['run', 'Hi', '--workspace', str(root), '--version', selected, '--json'])
     assert result.exit_code == 0, result.output
     assert json.loads(result.stdout)['source_version_id'] == selected
+
+
+def test_cli_samples_bounds(workspace, monkeypatch):
+    root, _, _ = workspace
+    calls = []
+
+    class FakeRunner:
+        details = {'device': 'cpu'}
+        def __init__(self, *args):
+            pass
+        def generate(self, *args):
+            calls.append(args)
+            return {'text': 'yes', 'tokens': 2, 'generation_seconds': .1, 'truncated': False}
+    monkeypatch.setattr(local, 'Runner', FakeRunner)
+    runner = CliRunner()
+    for bad in ('0', '17'):
+        result = runner.invoke(main.app, ['evaluate', '--workspace', str(root), '--samples', bad,
+                                          '--max-new-tokens', '4', '--output', str(root / f'bad{bad}.json')])
+        assert result.exit_code != 0
+        assert not calls
+        assert not (root / f'bad{bad}.json').exists()
+    output = root / 'sixteen.json'
+    result = runner.invoke(main.app, ['evaluate', '--workspace', str(root), '--samples', '16',
+                                      '--max-new-tokens', '4', '--output', str(output)])
+    assert result.exit_code == 0, result.output
+    assert json.loads(output.read_text())['samples_override'] == 16
+    assert len(output.with_suffix('.generations.jsonl').read_text().splitlines()) == 48
