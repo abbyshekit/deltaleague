@@ -43,3 +43,16 @@ Entries declare human or agent (model, tool) in the research PR (#3), and the bo
 
 ## 6. Reference entries
 Entries from the organiser, the evaluator maintainer or the author of the evaluation config appear as reference rows and are not ranked, because the private test and the evaluator are visible to them. The day-one reproduction belongs in that class.
+
+## 7. More base models
+One competition, one 0.8B checkpoint, cannot separate an edit that improves a model from an edit that fits one checkpoint. Proposal: add a second family and a second size, chosen by the rule the CLI's own distribution follows, a permissive licence and no gate, so patches can be published in full. Licence and gating as reported by the Hugging Face API on 2026-11-04:
+
+| Candidate | Licence | Gated | Why |
+|---|---|---|---|
+| `Qwen/Qwen3.5-2B` | Apache-2.0 | no | same family, larger: does an edit transfer across size? |
+| `allenai/OLMo-2-0425-1B` | Apache-2.0 | no | training data is public (Dolma), so proposal 3's contamination check can be run against the corpus rather than inferred |
+| `HuggingFaceTB/SmolLM3-3B` | Apache-2.0 | no | second family with a published training recipe |
+| `microsoft/Phi-4-mini-instruct` | MIT | no | third family, post-trained for reasoning |
+| `ibm-granite/granite-4.0-micro` | Apache-2.0 | no | hybrid architecture: does the edit recipe depend on the block type? |
+
+Excluded under the rule: `google/gemma-3-1b-it` (Gemma licence, gated) and `meta-llama/Llama-3.2-1B-Instruct` (Llama 3.2 licence, gated). The cheapest first step is OLMo-2-1B: it is the only candidate whose pre-training corpus can be searched for the test items.
