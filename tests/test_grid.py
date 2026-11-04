@@ -166,3 +166,29 @@ def test_registration_line_and_cells_requested(workspace, calls):
     assert result.exit_code == 0, result.output
     assert f'Grid {grid_hash(DEFAULT_GRID)}, pre-registered default; cells: default, temp-0.8' in result.output
     assert json.loads((root / 'g/grid-summary.json').read_text())['cells_requested'] == ['default', 'temp-0.8']
+
+
+def test_reserved_name_is_case_insensitive(workspace, calls):
+    root, _, _ = workspace
+    (root / 'grid.json').write_text(json.dumps({'Grid-Summary': {'temperature': .8}}))
+    result = CliRunner().invoke(main.app, ['grid', '--workspace', str(root), '--grid', str(root / 'grid.json'), '--output-dir', str(root / 'g')])
+    assert result.exit_code == 1 and 'reserved' in result.output
+    assert not calls
+
+
+def test_huge_integer_fails_cleanly(workspace, calls):
+    root, _, _ = workspace
+    (root / 'grid.json').write_text('{"hot": {"temperature": 1' + '0' * 400 + '}}')
+    result = CliRunner().invoke(main.app, ['grid', '--workspace', str(root), '--grid', str(root / 'grid.json'), '--output-dir', str(root / 'g')])
+    assert result.exit_code == 1 and "Generation key 'temperature'" in result.output
+    assert not isinstance(result.exception, OverflowError) and not calls
+
+
+def test_custom_baseline_name_is_reported(workspace, fake_runner):
+    root, _, _ = workspace
+    fake_runner(lambda g: 'yes' if g.get('temperature', .6) >= .8 else 'no')
+    (root / 'grid.json').write_text(json.dumps({'base': {}, 'hot': {'temperature': .8}}))
+    result = CliRunner().invoke(main.app, ['grid', '--workspace', str(root), '--grid', str(root / 'grid.json'), '--output-dir', str(root / 'g')])
+    assert result.exit_code == 0, result.output
+    assert json.loads((root / 'g/grid-summary.json').read_text())['default_cell'] == 'base'
+    assert 'Best: hot 100.0 (+100.0 over base)' in result.output

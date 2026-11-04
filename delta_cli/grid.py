@@ -32,10 +32,10 @@ def check_value(name, key, value):
     if kind is bool:
         ok = isinstance(value, bool)
     elif kind is int:
-        ok = isinstance(value, int) and not isinstance(value, bool) and value >= 1
+        ok = isinstance(value, int) and not isinstance(value, bool) and 1 <= value <= 10**9
     else:
-        ok = isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and value >= 0
-        ok = ok and (key != 'top_p' or value <= 1)
+        ok = isinstance(value, (int, float)) and not isinstance(value, bool) and (isinstance(value, int) or math.isfinite(value))
+        ok = ok and 0 <= value <= (1 if key == 'top_p' else 10**9)
     if not ok:
         raise ValueError(f"Generation key '{key}' in cell '{name}' must be {label}.")
 
@@ -52,7 +52,7 @@ def load_grid(path=None):
             raise ValueError(f"Invalid cell name '{name}': use letters, digits, '.', '_' and '-', not starting with '.'.")
         if (other := seen.setdefault(name.lower(), name)) != name:
             raise ValueError(f"Cell names must differ case-insensitively: '{other}' and '{name}'.")
-        if name == 'grid-summary':
+        if name.lower() == 'grid-summary':
             raise ValueError("Cell name 'grid-summary' is reserved for the summary file.")
         if not isinstance(overrides, dict):
             raise ValueError(f"Cell '{name}' must be an object of generation overrides.")
