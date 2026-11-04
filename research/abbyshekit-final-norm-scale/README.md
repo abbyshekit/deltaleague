@@ -45,7 +45,7 @@ delta validate submission-alpha
 Expected: the manifest lists one tensor, `model.language_model.norm.weight`; the artifact SHA-256 is in `results/manifest.json`.
 
 ## Submission (after `delta submit`)
-- Submission id:
+- Submission id: `8ff0f88e-249e-43ea-9fbd-1668b592ecdb` (submitted 2026-11-04T18:04Z, state `verifying`)
 - Version id (from `delta leaderboard --model qwen35-08b-v1`):
 - Official public validation / private test score:
 
