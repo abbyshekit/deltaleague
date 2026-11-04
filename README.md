@@ -48,7 +48,7 @@ Install with `pip install 'deltaleague[local]'`, then run these inside an initia
 ```sh
 delta run "What is 2 + 2?" --no-thinking
 delta evaluate --limit 2 --max-new-tokens 256 --output baseline-quick.json
-delta evaluate --weights edited.safetensors --limit 2 --max-new-tokens 256 --output edit-quick.json
+delta evaluate --weights edited.safetensors --limit 2 --max-new-tokens 256 --samples 4 --output edit-quick.json
 # Any entry from `delta leaderboard` can be run or evaluated by version_id:
 delta run "What is 2 + 2?" --version VERSION_ID --no-thinking
 ```

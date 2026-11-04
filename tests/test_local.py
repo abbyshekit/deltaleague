@@ -30,6 +30,17 @@ def workspace(tmp_path):
     return tmp_path, metadata, config
 
 
+@pytest.fixture
+def fake_runner(monkeypatch):
+    class FakeRunner:
+        details = {'device': 'cpu'}
+        def __init__(self, *args):
+            pass
+        def generate(self, *args):
+            return {'text': 'yes', 'tokens': 2, 'generation_seconds': .1, 'truncated': False}
+    monkeypatch.setattr(local, 'Runner', FakeRunner)
+
+
 def test_patch_overlay_reconstructs_without_mutating_parent(workspace):
     root, metadata, _ = workspace
     modified = root / 'edited.safetensors'
@@ -82,16 +93,30 @@ def test_device_selection_and_unavailable_device():
     with pytest.raises(ValueError, match='CUDA'):
         local.select_device(fake, 'cuda')
 
+def test_samples_override_replaces_every_example_count(workspace):
+    root, _, config = workspace
+    tasks, _, full = local.public_examples(root, config, samples=3)
+    assert len(tasks) == 9 and full is False
+    for example_id in ('a1', 'b1', 'b2'):
+        assert [t['seed'] for t in tasks if t['example']['id'] == example_id] == [1000, 1001, 1002]
+    for bad in (0, 17):
+        with pytest.raises(ValueError, match='Invalid sample count'):
+            local.public_examples(root, config, samples=bad)
 
-def test_cli_evaluation_report_and_existing_output_protection(workspace, monkeypatch):
+
+def test_cli_samples_override_is_reported(workspace, fake_runner):
     root, _, _ = workspace
-    class FakeRunner:
-        details = {'device': 'cpu'}
-        def __init__(self, *args):
-            pass
-        def generate(self, *args):
-            return {'text': 'yes', 'tokens': 2, 'generation_seconds': .1, 'truncated': False}
-    monkeypatch.setattr(local, 'Runner', FakeRunner)
+    output = root / 'samples.json'
+    result = CliRunner().invoke(main.app, ['evaluate', '--workspace', str(root), '--samples', '2',
+                                           '--max-new-tokens', '4', '--output', str(output)])
+    assert result.exit_code == 0, result.output
+    report = json.loads(output.read_text())
+    assert report['samples_override'] == 2 and report['full_validation_set'] is False
+    assert len(output.with_suffix('.generations.jsonl').read_text().splitlines()) == 6
+
+
+def test_cli_evaluation_report_and_existing_output_protection(workspace, fake_runner):
+    root, _, _ = workspace
     runner = CliRunner()
     output = root / 'result.json'
     args = ['evaluate', '--workspace', str(root), '--limit', '1', '--max-new-tokens', '4', '--output', str(output)]

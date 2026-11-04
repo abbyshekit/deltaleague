@@ -77,13 +77,14 @@ def run(prompt: str, workspace: Path = Path('.'), version: str | None = None,
 def evaluate(workspace: Path = Path('.'), version: str | None = None,
              weights: Path | None = None, patch: Path | None = None, device: str = 'auto',
              benchmark: str | None = None, limit: int | None = typer.Option(None, min=1),
+             samples: int | None = typer.Option(None, min=1, max=16),
              max_new_tokens: int | None = typer.Option(None, min=1),
              thinking: bool | None = typer.Option(None, '--thinking/--no-thinking'),
              output: Path = Path('local-results.json')):
-    """Evaluate public validation. --limit caps examples per benchmark; output is never an official score."""
+    """Evaluate public validation. --limit caps examples per benchmark; --samples sets runs per example; never an official score."""
     try:
         root, _, config, _ = local.read_workspace(workspace)
-        tasks, names, full = local.public_examples(root, config, benchmark, limit)
+        tasks, names, full = local.public_examples(root, config, benchmark, limit, samples)
         output = output.resolve()
         generations = output.with_suffix('.generations.jsonl')
         if output.exists() or generations.exists():
@@ -96,7 +97,7 @@ def evaluate(workspace: Path = Path('.'), version: str | None = None,
                 result = local.evaluate(runner, tasks, details['generation'], stream,
                     lambda index, total, name: typer.echo(f'[{index}/{total}] {name}', err=True))
             report = {**details, **result, 'complete': True, 'full_validation_set': full,
-                      'selected_benchmarks': names, 'examples_per_benchmark_limit': limit,
+                      'selected_benchmarks': names, 'examples_per_benchmark_limit': limit, 'samples_override': samples,
                       'validation_sha256': config['validation_sha256'], 'generations_file': str(generations),
                       'note': 'Advisory local score. Hardware/backend differences affect results; this is not a verified leaderboard score.'}
             with output.open('x') as stream:
