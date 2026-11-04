@@ -194,3 +194,15 @@ def test_cli_custom_validation_file(workspace, fake_runner):
     assert report['validation_sha256'] == hashlib.sha256(path.read_bytes()).hexdigest()
     assert report['full_validation_set'] is False
     assert report['validation_benchmarks'] == {'c': 100}
+
+
+def test_load_validation_error_paths(workspace):
+    root, _, config = workspace
+    with pytest.raises(ValueError, match='Cannot read'):
+        local.load_validation(root / 'missing.json')
+    mixed = root / 'mixed.json'
+    mixed.write_text('{"c": [{"id": "x", "prompt": "p", "answer": "a", "scorer": "exact"}, "text"]}')
+    with pytest.raises(ValueError, match='example objects'):
+        local.load_validation(mixed)
+    with pytest.raises(ValueError, match='inventory'):
+        local.load_validation(root / 'validation.json', {**config, 'validation_names': ['c']})
