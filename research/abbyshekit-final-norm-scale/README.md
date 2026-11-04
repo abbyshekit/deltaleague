@@ -51,7 +51,7 @@ Expected: the manifest lists one tensor, `model.language_model.norm.weight`; the
 - Submission id, arm 2 (α = 1.25): `f7742cff-f016-4ba2-bc04-e734086a331d` (submitted 2026-11-04T18:39Z while arm 1 was still queued)
 - Version id (from `delta leaderboard --model qwen35-08b-v1`):
 - Official public validation / private test score, arm 1 (α = 1.667): **13.33 / 0.00** (ARC 10, GSM8K 20, MATH-500 10; truncation 92.3% = 36 of 39; 1,196,452 output tokens; 801 generation seconds on an RTX 5090; verified 2026-11-04T20:05Z; version `d17ce35f-90e7-4582-85b5-4659f4a7704b`; `results/submission-arm1.json`)
-- Arm 2 (α = 1.25): pending
+- Official public validation / private test score, arm 2 (α = 1.25): **23.33 / 22.22** (ARC 30, GSM8K 30, MATH-500 10; truncation 74.4% = 29 of 39; 1,056,680 output tokens; 619 generation seconds; verified 2026-11-04T20:17Z; version `4fe2f3d6-6487-428d-99be-7ce9cf8a2cdb`; `results/submission-arm2.json`)
 
 ## Checklist
 - [x] No credentials, tokens or signed URLs
@@ -60,8 +60,17 @@ Expected: the manifest lists one tensor, `model.language_model.norm.weight`; the
 - [x] Parent and evaluation ids match `delta-workspace.json`
 - [x] `delta validate` passed on the submitted directory
 
-## Result against the predictions (arm 1)
-All three pre-registered predictions failed, in the same direction.
+## Results against the predictions
+Arm 1's three predictions failed, in the same direction; arm 2's three held. Together the three points are a dose-response curve in α:
+
+| α (effective temperature, effective presence penalty) | Public validation | Private test | Truncated of 39 | Output tokens |
+|---|---|---|---|---|
+| 1.000 (1.0, 1.5): the parent | 40.00 | 33.33 | 22 (56.4%) | 925,615 |
+| 1.250 (0.8, 1.2): arm 2 | 23.33 | 22.22 | 29 (74.4%) | 1,056,680 |
+| 1.667 (0.6, 0.9): arm 1 | 13.33 | 0.00 | 36 (92.3%) | 1,196,452 |
+| published edit, for reference | 46.67 | 33.33 | 14 (35.9%) | 774,666 |
+
+Arm 2 against its predictions: truncation 74.4% lies between the parent's 56.4% and arm 1's 92.3%; validation 23.33 is within 25 points of the parent; the private test is one item below the parent (2 of 9 against 3 of 9). Arm 1 against its predictions:
 
 | Prediction | Pre-registered | Observed |
 |---|---|---|
@@ -69,6 +78,6 @@ All three pre-registered predictions failed, in the same direction.
 | 2. Public validation within 25 points of 40.00 and 46.67 | yes | **13.33**: −26.67 from the parent, −33.33 from the published edit |
 | 3. Private test 33.33 ± one item | yes | **0.00** (0 of 9); the API reports `test_standard_error` 0.0 for it |
 
-Reading. The edit did what the logit check says it does: it is the parent sampled at an effective temperature of 0.6 with the presence penalty's effective size cut to 0.9. Under the server's 32,768-token budget that combination runs the thinking trace into the cap on 36 of 39 generations, and output tokens rose from 925,615 to 1,196,452, so the mechanism was the opposite of the hypothesis: a weaker effective presence penalty lets the trace loop, and a sharper distribution does not shorten it. The published edit, which cut truncation to 35.9%, is therefore not reproduced by a temperature-0.6 twin, so whatever it does is not "sharpen the distribution". The result does not test a decoding change that keeps the penalty at 1.5, because a weight-only edit cannot move the temperature without moving the penalty; the server would have to run such a cell (proposal 4 in `PROTOCOL.md`). Arm 2 (α = 1.25: temperature 0.8, penalty 1.2) gives the dose-response point between the parent and this arm.
+Reading. Both edits did what the logit check says they do: it is the parent sampled at an effective temperature of 0.6 with the presence penalty's effective size cut to 0.9. Under the server's 32,768-token budget that combination runs the thinking trace into the cap on 36 of 39 generations, and output tokens rose from 925,615 to 1,196,452, so the mechanism was the opposite of the hypothesis: a weaker effective presence penalty lets the trace loop, and a sharper distribution does not shorten it. The published edit, which cut truncation to 35.9%, is therefore not reproduced by a temperature-0.6 twin, so whatever it does is not "sharpen the distribution". The result does not test a decoding change that keeps the penalty at 1.5, because a weight-only edit cannot move the temperature without moving the penalty; the server would have to run such a cell (proposal 4 in `PROTOCOL.md`). Arm 2 sits between the parent and arm 1 on every column, so the effect is monotone in α: every step of logit scaling with the coupled penalty reduction costs truncation, validation and private-test items together. The published edit moves every column the other way, which is the clearest evidence yet that it is not a decoding change in disguise.
 
 Two facts for the protocol discussion. The server's `test_standard_error` is a sample estimate: it reports 0.0 when an entry scores 0 of 9, which understates the uncertainty of a 9-item test (the worst-case bound is 16.7 points). And the day-one scores of the parent and the published edit now sit two full tie bands above this entry on validation, which is the first result on this board that the board's own error bars can resolve.

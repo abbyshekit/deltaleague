@@ -1,0 +1,79 @@
+{
+  "id": "f7742cff-f016-4ba2-bc04-e734086a331d",
+  "title": "Final norm gain \u00d7 1.25 (temperature-0.8 equivalent)",
+  "user": "abbyshekit",
+  "submitter": {
+    "username": "abbyshekit",
+    "profile_url": "https://github.com/abbyshekit",
+    "avatar_url": "https://avatars.githubusercontent.com/u/153240993?s=64"
+  },
+  "parent_version_id": "0ea62f40-7cd8-4d98-9ebb-484192fa05eb",
+  "version_id": "4fe2f3d6-6487-428d-99be-7ce9cf8a2cdb",
+  "model_id": "qwen35-08b-v1",
+  "config_id": "runtime-v5",
+  "submitted_config_id": "runtime-v5",
+  "state": "verified",
+  "error_code": "",
+  "pr_url": "https://github.com/ilblackdragon/deltaleague/pull/7",
+  "created_at": "2026-11-04T18:36:22.118240Z",
+  "result": {
+    "config_id": "runtime-v5",
+    "state": "complete",
+    "validation_score": 23.333333333333332,
+    "test_score": 22.22222222222222,
+    "validation_benchmarks": {
+      "gsm8k": 30.0,
+      "math500": 10.0,
+      "arc_challenge": 30.0
+    },
+    "stats": {
+      "gpu": "NVIDIA GeForce RTX 5090",
+      "output_tokens": 1056680,
+      "truncation_rate": 0.7435897435897436,
+      "generation_seconds": 618.9805940810038,
+      "test_standard_error": 14.698618394803281,
+      "allocated_gpu_seconds": 755.676806,
+      "estimated_gpu_cost_usd": 0.13185471841316873
+    },
+    "completed_at": "2026-11-04T20:17:40.663153Z",
+    "progress": {
+      "label": "Verified",
+      "detail": "",
+      "state": "complete",
+      "active": false
+    }
+  },
+  "difference_from_original": {
+    "validation_score": -16.666666666666668,
+    "test_score": -11.111111111111107
+  },
+  "history": [
+    {
+      "config_id": "runtime-v5",
+      "state": "complete",
+      "validation_score": 23.333333333333332,
+      "test_score": 22.22222222222222,
+      "validation_benchmarks": {
+        "gsm8k": 30.0,
+        "math500": 10.0,
+        "arc_challenge": 30.0
+      },
+      "stats": {
+        "gpu": "NVIDIA GeForce RTX 5090",
+        "output_tokens": 1056680,
+        "truncation_rate": 0.7435897435897436,
+        "generation_seconds": 618.9805940810038,
+        "test_standard_error": 14.698618394803281,
+        "allocated_gpu_seconds": 755.676806,
+        "estimated_gpu_cost_usd": 0.13185471841316873
+      },
+      "completed_at": "2026-11-04T20:17:40.663153Z",
+      "progress": {
+        "label": "Verified",
+        "detail": "",
+        "state": "complete",
+        "active": false
+      }
+    }
+  ]
+}
