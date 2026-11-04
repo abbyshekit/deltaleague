@@ -21,14 +21,14 @@ Both entries hold rank 1. Each run is 39 generations, 30 public validation and 9
 ## 2. Size the private test to the claims it has to settle
 For a binary-scored item the worst-case standard error of a mean is 50/√n points:
 
-| n | SE (points) | Resolves about (1.96·√2·SE) |
+| n per benchmark | SE (points) | Resolves about (1.96·√2·SE) |
 |---|---|---|
 | 9 | 16.7 | 46 |
 | 100 | 5.0 | 14 |
 | 400 | 2.5 | 7 |
 | 1,600 | 1.25 | 3.5 |
 
-Cost at larger n is not measured. A linear extrapolation of today's $0.0030–0.0039 per generation gives $3.60–4.70 for 400 items per benchmark across the three benchmarks on one RTX 5090, about 31× today's 39 generations. The day-one figures include a fixed allocation overhead, so the per-generation cost at scale is lower and should be measured once. Several samples per item at temperature 1.0 cut the per-item variance for the same n; `samples` per example is already in the data format.
+Cost at larger n is not measured. A linear extrapolation of today's $0.0030–0.0039 per generation gives $3.60–4.70 for 400 items per benchmark across the three benchmarks (1,200 items) on one RTX 5090, about 31× today's 39 generations. The day-one figures include a fixed allocation overhead, so the per-generation cost at scale is lower and should be measured once. Several samples per item at temperature 1.0 cut the per-item variance for the same n; `samples` per example is already in the data format.
 
 ## 3. Rank on items the base model cannot have seen
 The private test is built from public benchmark examples and is marked provisional. The ARC-Challenge (2018), GSM8K (2021) and MATH (2021; MATH-500 is its 2023 subset) test items have been public for years. An edit can raise a score on them by sharpening recall rather than reasoning. The board cannot tell the two apart.
@@ -45,14 +45,14 @@ Entries declare human or agent (model, tool) in the research PR (#3), and the bo
 Entries from the organiser, the evaluator maintainer or the author of the evaluation config appear as reference rows and are not ranked, because the private test and the evaluator are visible to them. The day-one reproduction belongs in that class.
 
 ## 7. More base models
-One competition, one 0.8B checkpoint, cannot separate an edit that improves a model from an edit that fits one checkpoint. Proposal: add a second family and a second size, chosen by the rule the CLI's own distribution follows, a permissive licence and no gate, so patches can be published in full. Licence and gating as reported by the Hugging Face API on 2026-11-04:
+One competition, one 0.8B checkpoint, cannot separate an edit that improves a model from an edit that fits one checkpoint. Proposal: add a second family and a second size, chosen by one rule: a permissive licence and no gate, so patches can be published in full. Licence and gating as reported by the Hugging Face API on 2026-11-04:
 
 | Candidate | Licence | Gated | Why |
 |---|---|---|---|
 | `Qwen/Qwen3.5-2B` | Apache-2.0 | no | same family, larger: does an edit transfer across size? |
 | `allenai/OLMo-2-0425-1B` | Apache-2.0 | no | training data is public (Dolma), so proposal 3's contamination check can be run against the corpus rather than inferred |
 | `HuggingFaceTB/SmolLM3-3B` | Apache-2.0 | no | second family with a published training recipe |
-| `microsoft/Phi-4-mini-instruct` | MIT | no | third family, post-trained for reasoning |
-| `ibm-granite/granite-4.0-micro` | Apache-2.0 | no | hybrid architecture: does the edit recipe depend on the block type? |
+| `microsoft/Phi-4-mini-instruct` | MIT | no | third family, instruct-tuned (a `-reasoning` sibling exists under the same licence) |
+| `ibm-granite/granite-4.0-h-micro` | Apache-2.0 | no | attention and Mamba blocks in one stack (`layer_types` in its config): does the edit recipe depend on the block type? |
 
-Excluded under the rule: `google/gemma-3-1b-it` (Gemma licence, gated) and `meta-llama/Llama-3.2-1B-Instruct` (Llama 3.2 licence, gated). The cheapest first step is OLMo-2-1B: it is the only candidate whose pre-training corpus can be searched for the test items.
+Excluded under the rule: `google/gemma-3-1b-it` (Gemma licence, gated) and `meta-llama/Llama-3.2-1B-Instruct` (Llama 3.2 licence, gated). The cheapest first step is OLMo-2-1B: it is the one candidate with a fully public corpus and the tooling to search it for the test items.
