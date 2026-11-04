@@ -1,4 +1,3 @@
-import hashlib
 import json
 
 import pytest
@@ -16,9 +15,11 @@ def calls(fake_runner):
 
 
 def test_default_grid_is_preregistered():
-    assert DEFAULT_GRID['default'] == {}
-    canonical = json.dumps(DEFAULT_GRID, sort_keys=True, separators=(',', ':'))
-    assert grid_hash(DEFAULT_GRID) == hashlib.sha256(canonical.encode()).hexdigest()
+    assert list(DEFAULT_GRID) == ['default', 'temp-0.6', 'temp-0.8', 'presence-0.5', 'no-thinking', 'temp-0.6-no-thinking']
+    assert DEFAULT_GRID == {'default': {}, 'temp-0.6': {'temperature': 0.6}, 'temp-0.8': {'temperature': 0.8},
+                            'presence-0.5': {'presence_penalty': 0.5}, 'no-thinking': {'enable_thinking': False},
+                            'temp-0.6-no-thinking': {'temperature': 0.6, 'enable_thinking': False}}
+    assert grid_hash(DEFAULT_GRID) == '11ed4638f080ed85ba3c000fefe2623d72faceaad1ec0789ef9641674ff38405'
 
 
 def test_grid_reports_and_summary(workspace, calls):
@@ -132,3 +133,36 @@ def test_failed_run_leaves_partial_and_blocks_rerun(workspace, fake_runner):
     assert (root / 'g.partial/default.json').exists() and not (root / 'g').exists()
     result = CliRunner().invoke(main.app, args)
     assert result.exit_code == 1 and 'already exists' in result.output
+
+
+@pytest.mark.parametrize('text', ['{"x": {"top_p": 1.5}}', '{"x": {"temperature": Infinity}}', '{"x": {"max_tokens": 40000}}'])
+def test_invalid_values_fail_before_model_load(workspace, calls, text):
+    root, _, _ = workspace
+    (root / 'grid.json').write_text(text)
+    out = root / 'g'
+    result = CliRunner().invoke(main.app, ['grid', '--workspace', str(root), '--grid', str(root / 'grid.json'), '--output-dir', str(out)])
+    assert result.exit_code == 1
+    assert not calls and not out.exists() and not (root / 'g.partial').exists()
+
+
+def test_oversized_max_tokens_names_cell(workspace, calls):
+    root, _, _ = workspace
+    (root / 'grid.json').write_text('{"big": {"max_tokens": 40000}}')
+    result = CliRunner().invoke(main.app, ['grid', '--workspace', str(root), '--grid', str(root / 'grid.json')])
+    assert "Cell 'big' sets max_tokens 40000, at or above max_model_len 34816." in result.output
+
+
+@pytest.mark.parametrize('content', [{'.hidden': {}}, {'Hot': {'temperature': .8}, 'hot': {'temperature': .9}}])
+def test_load_grid_rejects_bad_names(tmp_path, content):
+    path = tmp_path / 'grid.json'
+    path.write_text(json.dumps(content))
+    with pytest.raises(ValueError):
+        load_grid(path)
+
+
+def test_registration_line_and_cells_requested(workspace, calls):
+    root, _, _ = workspace
+    result = CliRunner().invoke(main.app, ['grid', '--workspace', str(root), '--cells', 'temp-0.8', '--output-dir', str(root / 'g')])
+    assert result.exit_code == 0, result.output
+    assert f'Grid {grid_hash(DEFAULT_GRID)}, pre-registered default; cells: default, temp-0.8' in result.output
+    assert json.loads((root / 'g/grid-summary.json').read_text())['cells_requested'] == ['default', 'temp-0.8']

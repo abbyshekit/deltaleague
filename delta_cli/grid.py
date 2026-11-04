@@ -1,6 +1,7 @@
 """Pre-registered decoding grid: one model load, one evaluation per generation setting."""
 import hashlib
 import json
+import math
 import re
 from pathlib import Path
 
@@ -10,7 +11,7 @@ from . import local
 from .local_commands import NOTE, budget_line, experiment, fail, generation_for, write_report
 
 RULES = {'enable_thinking': (bool, 'a boolean'), 'max_tokens': (int, 'a positive integer'), 'top_k': (int, 'a positive integer'),
-         'temperature': (float, 'a non-negative number'), 'top_p': (float, 'a non-negative number'),
+         'temperature': (float, 'a non-negative number'), 'top_p': (float, 'a number from 0 to 1'),
          'presence_penalty': (float, 'a non-negative number')}
 DEFAULT_GRID = {
     'default': {},
@@ -33,7 +34,8 @@ def check_value(name, key, value):
     elif kind is int:
         ok = isinstance(value, int) and not isinstance(value, bool) and value >= 1
     else:
-        ok = isinstance(value, (int, float)) and not isinstance(value, bool) and value >= 0
+        ok = isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and value >= 0
+        ok = ok and (key != 'top_p' or value <= 1)
     if not ok:
         raise ValueError(f"Generation key '{key}' in cell '{name}' must be {label}.")
 
@@ -44,9 +46,12 @@ def load_grid(path=None):
     grid = json.loads(Path(path).read_text())
     if not isinstance(grid, dict) or not grid:
         raise ValueError('Grid file must be a non-empty JSON object of {cell: {overrides}}.')
+    seen = {}
     for name, overrides in grid.items():
-        if not re.fullmatch(r'[A-Za-z0-9._-]+', name):
-            raise ValueError(f"Invalid cell name '{name}': use letters, digits, '.', '_' and '-'.")
+        if not re.fullmatch(r'[A-Za-z0-9._-]+', name) or name.startswith('.'):
+            raise ValueError(f"Invalid cell name '{name}': use letters, digits, '.', '_' and '-', not starting with '.'.")
+        if (other := seen.setdefault(name.lower(), name)) != name:
+            raise ValueError(f"Cell names must differ case-insensitively: '{other}' and '{name}'.")
         if name == 'grid-summary':
             raise ValueError("Cell name 'grid-summary' is reserved for the summary file.")
         if not isinstance(overrides, dict):
@@ -94,7 +99,15 @@ def grid(workspace: Path = Path('.'), version: str | None = None,
         partial = output_dir.with_name(output_dir.name + '.partial')
         if output_dir.exists() or partial.exists():
             raise ValueError(f'Output already exists: {output_dir} or {partial}. Choose a new --output-dir to preserve previous results.')
-        budget_line([({**generation_for(config, max_new_tokens, thinking), **cell_grid[name]}, len(tasks)) for name in selected])
+        effective = [({**generation_for(config, max_new_tokens, thinking), **cell_grid[name]}, len(tasks)) for name in selected]
+        limit_len = config['generation'].get('max_model_len', 34816)
+        for name, (generation, _) in zip(selected, effective):
+            if (tokens := generation.get('max_tokens', local.MAX_TOKENS)) >= limit_len:
+                raise ValueError(f"Cell '{name}' sets max_tokens {tokens}, at or above max_model_len {limit_len}.")
+        grid_sha256 = grid_hash(cell_grid)
+        preregistered = cell_grid == DEFAULT_GRID
+        budget_line(effective)
+        typer.echo(f"Grid {grid_sha256}{', pre-registered default' if preregistered else ''}; cells: {', '.join(selected)}", err=True)
         with experiment(workspace, version, weights, patch, device, max_new_tokens, thinking) as (runner, details):
             partial.mkdir(parents=True)
             rows = []
@@ -109,7 +122,7 @@ def grid(workspace: Path = Path('.'), version: str | None = None,
             best = best_cell(rows, default)
             score = {row['name']: row['validation_score'] for row in rows}
             summary = {'local_only': True, **{k: details[k] for k in ('model_id', 'config_id', 'source_version_id', 'artifact')},
-                       'grid_sha256': grid_hash(cell_grid), 'preregistered': cell_grid == DEFAULT_GRID, 'cells': rows,
+                       'grid_sha256': grid_sha256, 'preregistered': preregistered, 'cells_requested': selected, 'cells': rows,
                        'default_cell': default, 'best_cell': best, 'best_minus_default': score[best] - score[default],
                        'selected_benchmarks': names, 'examples_per_benchmark_limit': limit, 'note': NOTE}
             with (partial / 'grid-summary.json').open('x') as stream:
@@ -117,6 +130,6 @@ def grid(workspace: Path = Path('.'), version: str | None = None,
         partial.rename(output_dir)
         for row in rows:
             typer.echo(f"{row['name']:<24}{row['validation_score']:6.1f}  {row['truncation_rate'] * 100:5.1f}% truncated  {row['output_tokens']:>9,} tokens")
-        typer.echo(f"Best: {best} {score[best]:.1f} ({summary['best_minus_default']:+.1f} over default). Compare a candidate with: delta compare {output_dir / (best + '.json')} candidate.json")
+        typer.echo(f"Best: {best} {score[best]:.1f} ({summary['best_minus_default']:+.1f} over {default}). Compare a candidate with: delta compare {output_dir / (best + '.json')} candidate.json")
     except (ImportError, OSError, ValueError, KeyError, RuntimeError) as exc:
         fail(exc)
