@@ -1,4 +1,4 @@
-"""Scale the language model's final RMSNorm by ALPHA: under fixed decoding this equals temperature 1/ALPHA with the presence penalty also divided by ALPHA."""
+"""Scale the language model's final RMSNorm gain by ALPHA. Qwen3.5's RMSNorm is zero-centred (gain = 1 + w), so the stored weight becomes ALPHA * (1 + w) - 1; under fixed decoding this equals temperature 1/ALPHA with the presence penalty also divided by ALPHA."""
 import sys
 import torch
 from safetensors.torch import load_file, save_file
@@ -6,7 +6,7 @@ alpha, out = float(sys.argv[1]), sys.argv[2]
 name = 'model.language_model.norm.weight'
 weights = load_file('model/model.safetensors')
 before = weights[name].clone()
-weights[name] = (weights[name].float() * alpha).to(torch.bfloat16)
+weights[name] = (alpha * (1 + before.float()) - 1).to(torch.bfloat16)
 save_file(weights, out)
-changed = int((weights[name] != before).sum())
-print(f'{name}: {changed} of {before.numel()} entries changed; mean |w| {before.float().abs().mean():.4f} -> {weights[name].float().abs().mean():.4f}')
+gain = (1 + weights[name].float()) / (1 + before.float())
+print(f'{name}: {int((weights[name] != before).sum())} of {before.numel()} entries changed; effective gain min {gain.min():.4f} max {gain.max():.4f} (target {alpha:.4f})')

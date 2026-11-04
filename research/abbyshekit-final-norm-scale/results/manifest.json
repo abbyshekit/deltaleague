@@ -15,7 +15,7 @@
   "artifacts": [
     {
       "name": "weights.safetensors",
-      "sha256": "a43a45d2bc588f3a73b04e568544dfcb78b039779caa0aa2fac1d6ce82458675",
+      "sha256": "d9e032b7a098972898fee3a69bb42870821bcb89f4c0060d4b0a9142c66c33c5",
       "size_bytes": 10400
     }
   ]
