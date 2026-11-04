@@ -20,6 +20,7 @@ auth.json
 *.bin
 *.pt
 *.pth
+*.npz
 
 # Local checkpoint caches and inference output
 .delta/

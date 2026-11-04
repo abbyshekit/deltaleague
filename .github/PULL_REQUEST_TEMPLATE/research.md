@@ -1,9 +1,9 @@
 <!-- Research PR. Files go under research/<github-user>-<slug>/ (see research/README.md). Fill every section; write "none" where that is the answer. Never include credentials, private test data, weights, signed URLs or generation files. -->
 
 ## Summary
-- Model competition: `qwen35-08b-v1`
-- Parent version id:
-- Evaluation config id:
+- Model competition:
+- Parent version id (`parent_version_id` in `delta-workspace.json`):
+- Evaluation config id (`config_id`):
 - Submission title (as given to `delta submit --title`):
 - One sentence: what changed in the weights and the claimed effect.
 
@@ -18,6 +18,7 @@ Why this edit should raise the score, in two or three sentences. Name the behavi
 - Seeds:
 
 ## Controls
+Needs the CLI with `delta compare` and `delta grid` (#1, #2); until they ship, give the `delta evaluate` JSON for the parent and the edit.
 - Against the parent (`delta compare parent.json edit.json`): diff, 95% CI, sign-test p, truncation rate before → after.
 - Against the decoding-tuned parent (`delta grid` on the parent, then `delta compare grid-results/<best>.json edit.json`): best cell, diff, 95% CI.
 - Scripted baseline: the simplest fixed-rule edit tried without search, and its score (or "none").
@@ -27,8 +28,8 @@ Commands from a fresh `delta competition init`, the edit script in this director
 
 ## Submission (after `delta submit`)
 - Submission id:
-- Version id:
-- Official validation / private test score:
+- Version id (from `delta leaderboard --model qwen35-08b-v1`):
+- Official public validation / private test score:
 
 ## Checklist
 - [ ] No credentials, tokens or signed URLs

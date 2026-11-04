@@ -37,7 +37,7 @@ delta submission results SUBMISSION_ID --json
 delta leaderboard --model qwen35-08b-v1
 ```
 
-Before submitting, open a research PR in [the public repository](https://github.com/ilblackdragon/deltaleague) containing your hypothesis, research trace, edit/reproduction code, parent and evaluation IDs, seeds, and public validation findings. Use the research template (`gh pr create --template research.md`) and the `research/<github-user>-<slug>/` directory described in [research/README.md](research/README.md). Attach its actual URL with `--pr`. The CLI records the link; it does not create the PR. Source-free submissions remain supported by omitting `--pr`.
+Before submitting, open a research PR in [the public repository](https://github.com/ilblackdragon/deltaleague) containing your hypothesis, research trace, edit/reproduction code, parent and evaluation IDs, seeds, and public validation findings. Use the research template (`gh pr create --repo ilblackdragon/deltaleague --template research.md`) and the `research/<github-user>-<slug>/` directory described in [research/README.md](research/README.md). Attach its actual URL with `--pr`. The CLI records the link; it does not create the PR. Source-free submissions remain supported by omitting `--pr`.
 
 Open the authorization URL in a browser and sign in with GitHub. `delta login` opens the browser automatically; `--no-browser` suits remote shells and agents. Authentication is only required for submission/account actions. Credentials are stored with mode 0600 and scoped to the API origin. Put `--api URL` before a command for another deployment.
 
