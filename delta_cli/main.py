@@ -1,4 +1,5 @@
 import json
+import math
 import os
 import sys
 from pathlib import Path
@@ -276,9 +277,57 @@ def results(submission: str, json_output: bool = typer.Option(False, "--json")):
     show(call("GET", f"submissions/{submission}")["result"])
 
 
+Z = 1.96
+
+
+def tied(a, b):
+    """Two scored rows are tied when their gap is within Z combined standard errors."""
+    (_, x, sx), (_, y, sy) = a, b
+    return abs(x - y) <= Z * math.hypot(sx, sy)
+
+
+def tie_groups(scored):
+    """Transitively tied groups of two or more scored rows, in original order."""
+    groups = []
+    for i, row in enumerate(scored):
+        hit = [g for g in groups if any(tied(row, scored[j]) for j in g)]
+        groups = [g for g in groups if g not in hit] + [sorted(sum(hit, []) + [i])]
+    return [[scored[i] for i in g] for g in sorted(groups) if len(g) > 1]
+
+
+def render_board(board):
+    """Plain-text leaderboard with test standard errors and statistically tied groups."""
+    num = lambda v: "—" if v is None else f"{v:.2f}"
+    table, scored = [["rank", "name", "submitter", "validation", "test ± se"]], []
+    for r in board["rows"]:
+        res = r.get("result") or {}
+        test, se = res.get("test_score"), (res.get("stats") or {}).get("test_standard_error")
+        who = "original" if r.get("parent_id") is None else ((r.get("submitter") or {}).get("username") or "—")
+        table.append([str(r.get("rank") or "—"), r["name"][:40], who, num(res.get("validation_score")),
+                      num(test) if se is None else f"{num(test)} ± {num(se)}"])
+        if res.get("state") == "complete" and test is not None and se is not None:
+            scored.append((r["name"], test, se))
+    widths = [max(map(len, col)) for col in zip(*table)]
+    lines = ["  ".join(c.ljust(w) for c, w in zip(row, widths)).rstrip() for row in table]
+    if not scored:
+        return "\n".join(lines + ["", "No standard errors reported."])
+    groups = [f"Not separable on the private test: {', '.join(r[0] for r in g)}" for g in tie_groups(scored)]
+    ses = [r[2] for r in scored]
+    top = max(ses)
+    upto = "" if min(ses) == top else "up to "
+    noise = Z * math.sqrt(2) * top
+    return "\n".join(lines + [""] + (groups or ["All rows are separable on the private test."]) +
+                     [f"Private test standard error {upto}{top:.2f} points: a difference under {noise:.2f} is noise (1.96·√2·SE)"])
+
+
 @app.command()
-def leaderboard(model: str | None = None):
-    show(call("GET", "leaderboard", params={"model": model} if model else {}))
+def leaderboard(model: str | None = None,
+                table: bool = typer.Option(False, "--table", help="Print scores with standard errors and tie groups.")):
+    board = call("GET", "leaderboard", params={"model": model} if model else {})
+    if table:
+        typer.echo(render_board(board))
+    else:
+        show(board)
 
 
 app.command("run")(run)
