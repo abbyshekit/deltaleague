@@ -1,6 +1,7 @@
 import json
 import math
 import os
+import re
 import sys
 from pathlib import Path
 import time
@@ -295,6 +296,10 @@ def tie_groups(scored):
     return [[scored[i] for i in g] for g in sorted(groups) if len(g) > 1]
 
 
+def plain(text, width):
+    return re.sub(r"[\x00-\x1f\x7f-\x9f]", "?", str(text))[:width]
+
+
 def render_board(board):
     """Plain-text leaderboard with test standard errors and statistically tied groups."""
     num = lambda v: "—" if v is None else f"{v:.2f}"
@@ -304,11 +309,11 @@ def render_board(board):
         res = r.get("result") or {}
         test, se = res.get("test_score"), (res.get("stats") or {}).get("test_standard_error")
         test_ok, se_ok = ok(test), ok(se) and se >= 0
-        who = "original" if r.get("parent_id") is None else ((r.get("submitter") or {}).get("username") or "—")
-        name = str(r.get("name") or "—")
+        who = "original" if r.get("parent_id") is None else plain((r.get("submitter") or {}).get("username") or "—", 24)
+        name = plain(r.get("name") or "—", 40)
         rank = r.get("rank")
         vscore = res.get("validation_score")
-        table.append(["—" if rank is None else str(rank), name[:40], who, num(vscore if ok(vscore) else None),
+        table.append(["—" if rank is None else str(rank), name, who, num(vscore if ok(vscore) else None),
                       (num(test) if test_ok else "—") + (f" ± {se:.2f}" if se_ok else "")])
         if res.get("state") == "complete" and test_ok and se_ok:
             scored.append((name, test, se))

@@ -142,3 +142,16 @@ def test_table_needs_model():
     result = runner.invoke(main.app, ["leaderboard", "--table"])
     assert result.exit_code != 0
     assert "--table needs --model: tie groups are per competition." in result.output
+
+
+def test_table_sanitises_names(monkeypatch):
+    serve(monkeypatch, [row("clean", 50.0, 1.0, submitter={"username": "u"})])
+    clean = runner.invoke(main.app, ARGS + ["--table"]).output
+    serve(monkeypatch, [row("a\x1b]0;pwn\x07\nFAKE 1 x", 50.0, 1.0, submitter={"username": "u\x1b[2J"})])
+    out = runner.invoke(main.app, ARGS + ["--table"]).output
+    assert not any(c in out for c in "\x1b\x07")
+    assert out.count("\n") == clean.count("\n")
+    assert "a?]0;pwn??FAKE 1 x" in out and "u?[2J" in out
+    serve(monkeypatch, [row("n", 50.0, 1.0, submitter={"username": "x" * 60})])
+    out = runner.invoke(main.app, ARGS + ["--table"]).output
+    assert "x" * 24 in out and "x" * 25 not in out
