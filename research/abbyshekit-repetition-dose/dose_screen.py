@@ -13,12 +13,15 @@ items (never private test material); regenerate with the commands shown, from ..
   ctrl-grid/temp-0.6-pp-0.9.generations.jsonl   delta grid --grid grid-alpha.json (closed traces for the answer-phase gate)
   heldout-v1.json                          prompts for any trace generated on local held-out items (none were used here)
 Traces whose retokenised length differs from the recorded token count by more than 2 are skipped and reported.
+Sign convention: the SVD fixes u only up to sign, so after the screen u (and every reported loop component) is oriented so
+that the original model's mean component over thinking positions is positive; the edit then reads as moving it negative.
 """
-import json, os, time, math, sys, gc
+import json, time, math, sys, gc
 import torch
 from safetensors import safe_open
 from safetensors.torch import load_file, save_file
 T0 = time.time(); EX = '../experiment/'; THINK = 248069; PP = 1.5; LAY = (15, 19); MODE = sys.argv[1] if len(sys.argv) > 1 else 'full'
+assert MODE in ('step1', 'full'), 'usage: dose_screen.py [step1|full]'
 KEY = lambda l: f'model.language_model.layers.{l}.mlp.down_proj.weight'
 LP, PP_ = 'model/model.safetensors', EX + 'model/model.safetensors'
 def get(path, k):
@@ -30,7 +33,6 @@ for l in LAY:
     D = wl.float() - wp.float(); cols = (D != 0).any(0).nonzero().flatten(); CHOSEN[l] = cols
     sv = torch.linalg.svd(D[:, cols], full_matrices=False); e = (sv[1] ** 2 / (sv[1] ** 2).sum())[:3].tolist()
     u = sv[0][:, 0]; Dc, Wc = D[:, cols], wp.float()[:, cols]
-    if ((u @ Dc) * (u @ Wc)).sum() > 0: u = -u
     s = -(u @ Dc) / (u @ Wc); U[l] = u; SMED[l] = s.median().item()
     proj = (u @ wp.float()).abs(); order = proj.argsort(descending=True); ORDER[l] = order
     rank = torch.empty_like(order); rank[order] = torch.arange(len(order)); rk = (rank[cols] + 1)
@@ -60,7 +62,7 @@ for name, ws in ARMS.items():
     if name in ('parent', 'leader'): continue
     sd = dict(base)
     for l in LAY: sd[KEY(l)] = ws[l]
-    if not os.path.exists(f'edited-dose-{name}.safetensors'): save_file(sd, f'edited-dose-{name}.safetensors', metadata={'format': 'pt'})
+    save_file(sd, f'edited-dose-{name}.safetensors', metadata={'format': 'pt'})  # always rewritten so the file matches what step 3 screens
     del sd
 del base; gc.collect()
 # ---- step 3
@@ -124,9 +126,13 @@ for arm in ['leader', 'parent'] + [a for a in ARMS if a not in ('leader', 'paren
     r['bf16_rel_change_vs_parent'] = {l: ((ARMS[arm][l].float() - Wp[l].float()).norm() / Wp[l].float().norm()).item() for l in LAY}
     r['bf16_rel_change_vs_leader'] = {l: ((ARMS[arm][l].float() - Wl[l].float()).norm() / Wl[l].float().norm()).item() for l in LAY}
     RES[arm] = r; print(arm, json.dumps(r, default=float), round(time.time() - T0), 's', flush=True)
+for l in LAY:  # orient u so the original model writes a positive mean component (see header)
+    if RES['parent'][f'loop{l}_mean'] < 0:
+        U[l] = -U[l]
+        for r in RES.values(): r[f'loop{l}_mean'] = -r[f'loop{l}_mean']
 json.dump(dict(step1={k: v for k, v in S1.items()}, u={l: U[l].tolist() for l in LAY}, arms=RES, top64_rule=top64, wall=time.time() - T0), open('dose-results.json', 'w'), default=float)
-print('\n%-8s %9s %9s %7s %7s %7s %7s %7s %7s %7s %7s' % ('arm', 'L15loop', 'L19loop', 'r15', 'r19', 'KLthk', 'KLans', 'top1t', 'top1a', 'P32k', 'gapMed(arc/gsm/math)'))
+print('\n%-8s %9s %9s %7s %7s %7s %7s %7s %7s %7s %7s' % ('arm', 'L15loop', 'L19loop', 'r15', 'r19', 'KLthk', 'KLans', 'top1t', 'top1a', 'P32k', 'gap median/p10 (arc/gsm8k/math500)'))
 for a, r in RES.items():
     print('%-8s %9.3f %9.3f %7.2f %7.2f %7.4f %7.4f %7.4f %7.4f %7.4f' % (a, r['loop15_mean'], r['loop19_mean'], r['loop15_last_over_first_4k'], r['loop19_last_over_first_4k'], r['KL_think'], r['KL_answer'], r['top1_think'], r['top1_answer'], r['P32k_mean']),
-          [f"{r[f'gap_{f}']['median']:.2f}/{r[f'gap_{f}']['p10']:.2f}" for f in ('arc', 'gsm8k', 'math500') if f'gap_{f}' in r])
+          [f"{r[f'gap_{f}']['median']:.2f}/{r[f'gap_{f}']['p10']:.2f}" if f'gap_{f}' in r else f'{f}: no thinking traces' for f in ('arc', 'gsm8k', 'math500')])
 print('wall', round(time.time() - T0), 's')
