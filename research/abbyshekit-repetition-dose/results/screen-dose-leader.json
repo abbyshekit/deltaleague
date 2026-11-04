@@ -1,0 +1,51 @@
+{
+ "local_only": true,
+ "model_id": "qwen35-08b-v1",
+ "config_id": "runtime-v5",
+ "source_version_id": "a155dc2f-4075-48a3-9102-e1749f2b352f",
+ "source_content_hash": "d83bb9b456e1db104b75f2d0c840155c3be36bd38f169d58ea620c3c6b31037f",
+ "artifact": {
+  "kind": "parent",
+  "weights_sha256": "bd5c223dc7d0ed48a6857f798a94da6ec46c40b9ff4e7bc31872dba10f943ae5"
+ },
+ "runtime": {
+  "backend": "transformers",
+  "transformers": "5.22.1",
+  "torch": "2.15.0",
+  "device": "mps",
+  "dtype": "torch.float32",
+  "mps_cpu_fallback": true
+ },
+ "generation": {
+  "top_k": 20,
+  "top_p": 0.95,
+  "max_tokens": 4096,
+  "temperature": 1.0,
+  "max_model_len": 34816,
+  "enable_thinking": true,
+  "presence_penalty": 1.5
+ },
+ "generation_overridden": true,
+ "evaluation_sha256": "89c91a3294bbfd17b705d67fb901285ba9aa7f09e3e40b736bc4347f0e1cf0da",
+ "validation_score": 33.333333333333336,
+ "validation_benchmarks": {
+  "arc_fresh": 50.0,
+  "gsm_fresh": 50.0,
+  "math_fresh": 0.0
+ },
+ "output_tokens": 23269,
+ "generation_seconds": 3649.698183874134,
+ "truncation_rate": 0.8333333333333334,
+ "complete": true,
+ "full_validation_set": false,
+ "selected_benchmarks": [
+  "arc_fresh",
+  "gsm_fresh",
+  "math_fresh"
+ ],
+ "examples_per_benchmark_limit": null,
+ "validation_sha256": "d2ee8e8620e688da9e5d41d64ca7d9d6a3a25bad7e154dada527d8f134cf3fe7",
+ "validation_file": "dev6.json",
+ "generations_file": "screen-dose-leader.generations.jsonl",
+ "note": "Advisory local score. Hardware/backend differences affect results; this is not a verified leaderboard score."
+}

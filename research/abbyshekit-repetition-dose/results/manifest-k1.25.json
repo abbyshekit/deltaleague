@@ -1,0 +1,26 @@
+{
+  "schema_version": "delta.submission.v1",
+  "format": "sparse-diff",
+  "operation": "replace",
+  "reconstruction_version": "delta-reconstruct-v1",
+  "parent_version_id": "a155dc2f-4075-48a3-9102-e1749f2b352f",
+  "parent_content_hash": "d83bb9b456e1db104b75f2d0c840155c3be36bd38f169d58ea620c3c6b31037f",
+  "model_config_id": "qwen35-08b-v1",
+  "tensors": {
+    "model.language_model.layers.15.mlp.down_proj.weight": {
+      "indices": "t97.indices",
+      "values": "t97.values"
+    },
+    "model.language_model.layers.19.mlp.down_proj.weight": {
+      "indices": "t150.indices",
+      "values": "t150.values"
+    }
+  },
+  "artifacts": [
+    {
+      "name": "weights.safetensors",
+      "sha256": "628a404891978c513638d0697ab8f1befd743740b4cec440edc5624537b1e23e",
+      "size_bytes": 1277330
+    }
+  ]
+}

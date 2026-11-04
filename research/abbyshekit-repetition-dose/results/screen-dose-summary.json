@@ -1,0 +1,61 @@
+{
+ "definitions": {
+  "truncated": "generation hit the 4,096-token cap",
+  "closed": "text contains </think>",
+  "ws_tail": "last 300 characters hold fewer than 30 non-space characters",
+  "loop": "more than half of the last 300 eight-grams (whitespace-split) also occur earlier in the text",
+  "close_tokens": "output tokens of each closed item"
+ },
+ "items": [
+  "arc_fresh-0",
+  "arc_fresh-1",
+  "gsm_fresh-0",
+  "gsm_fresh-1",
+  "math_fresh-0",
+  "math_fresh-1"
+ ],
+ "max_new_tokens": 4096,
+ "samples_per_item": 1,
+ "arms": {
+  "leader": {
+   "n": 6,
+   "truncated": 5,
+   "closed": 1,
+   "ws_tail": 0,
+   "loop": 0,
+   "close_tokens": {
+    "arc_fresh-1": 2789
+   }
+  },
+  "k1.25": {
+   "n": 6,
+   "truncated": 5,
+   "closed": 1,
+   "ws_tail": 0,
+   "loop": 0,
+   "close_tokens": {
+    "arc_fresh-1": 2644
+   }
+  },
+  "k1.5": {
+   "n": 6,
+   "truncated": 5,
+   "closed": 1,
+   "ws_tail": 0,
+   "loop": 0,
+   "close_tokens": {
+    "arc_fresh-1": 2132
+   }
+  },
+  "k2.0": {
+   "n": 6,
+   "truncated": 5,
+   "closed": 1,
+   "ws_tail": 0,
+   "loop": 0,
+   "close_tokens": {
+    "arc_fresh-1": 2018
+   }
+  }
+ }
+}
