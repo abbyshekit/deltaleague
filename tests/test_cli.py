@@ -69,3 +69,86 @@ def test_api_connection_failure_does_not_print_credentials(monkeypatch):
     assert result.exit_code == 1
     assert 'secret' not in result.output
     assert 'Could not reach' in result.output
+
+
+def fake_api(monkeypatch, handler):
+    monkeypatch.setattr(main, 'client', lambda: httpx.Client(base_url='https://x', transport=httpx.MockTransport(handler)))
+    monkeypatch.setattr(main.time, 'sleep', lambda *_: None)
+
+
+def login_handler(failures):
+    polls = []
+
+    def handler(request):
+        if request.url.path.endswith('/cli-auth'):
+            return httpx.Response(200, json={'id': 'i', 'secret': 's', 'verification_url': 'https://x/approve', 'interval': 0})
+        polls.append(request)
+        if len(polls) <= len(failures):
+            failure = failures[len(polls) - 1]
+            if failure is None:
+                raise httpx.ConnectError('down', request=request)
+            return httpx.Response(failure)
+        return httpx.Response(200, json={'token': 't'})
+    return handler, polls
+
+
+def test_login_poll_survives_transient_errors(tmp_path, monkeypatch):
+    handler, polls = login_handler([None, None])
+    fake_api(monkeypatch, handler)
+    config = tmp_path / 'config' / 'config.json'
+    monkeypatch.setattr(main, 'config_path', lambda: config)
+    result = runner.invoke(main.app, ['login', '--no-browser'])
+    assert result.exit_code == 0
+    assert 'Signed in.' in result.output
+    assert len(polls) == 3
+    assert '"token": "t"' in config.read_text()
+
+
+def test_login_poll_survives_transient_server_error(tmp_path, monkeypatch):
+    handler, polls = login_handler([503])
+    fake_api(monkeypatch, handler)
+    config = tmp_path / 'config.json'
+    monkeypatch.setattr(main, 'config_path', lambda: config)
+    result = runner.invoke(main.app, ['login', '--no-browser'])
+    assert result.exit_code == 0
+    assert len(polls) == 2
+    assert '"token": "t"' in config.read_text()
+
+
+def test_call_retries_are_bounded(monkeypatch, capsys):
+    attempts = []
+
+    def handler(request):
+        attempts.append(request)
+        raise httpx.ConnectError('down', request=request)
+    fake_api(monkeypatch, handler)
+    with pytest.raises(main.typer.Exit):
+        main.call('GET', 'x', retries=2)
+    assert len(attempts) == 3
+    assert 'Could not reach' in capsys.readouterr().err
+    attempts.clear()
+    with pytest.raises(main.typer.Exit):
+        main.call('GET', 'x')
+    assert len(attempts) == 1
+
+
+def test_status_watch_survives_transient_errors(monkeypatch):
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        if len(calls) <= 2:
+            raise httpx.ConnectError('down', request=request)
+        return httpx.Response(200, json={'state': 'verified'})
+    fake_api(monkeypatch, handler)
+    result = runner.invoke(main.app, ['submission', 'status', 'x', '--watch'])
+    assert result.exit_code == 0
+    assert 'verified' in result.output
+    calls.clear()
+
+    def once(request):
+        raise httpx.ConnectError('down', request=request)
+    fake_api(monkeypatch, once)
+    result = runner.invoke(main.app, ['submission', 'status', 'x'])
+    assert result.exit_code == 1
+    assert 'Could not reach' in result.output
