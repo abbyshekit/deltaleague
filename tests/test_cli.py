@@ -132,6 +132,60 @@ def test_call_retries_are_bounded(monkeypatch, capsys):
     assert len(attempts) == 1
 
 
+def test_call_retries_429_then_succeeds(monkeypatch):
+    attempts = []
+
+    def handler(request):
+        attempts.append(request)
+        return httpx.Response(429) if len(attempts) == 1 else httpx.Response(200, json={'ok': 1})
+    fake_api(monkeypatch, handler)
+    assert main.call('GET', 'me', retries=2) == {'ok': 1}
+    assert len(attempts) == 2
+
+
+def test_call_stops_at_bound_on_persistent_5xx(monkeypatch, capsys):
+    attempts = []
+
+    def handler(request):
+        attempts.append(request)
+        return httpx.Response(503, json=['down'])
+    fake_api(monkeypatch, handler)
+    with pytest.raises(main.typer.Exit):
+        main.call('GET', 'me', retries=2)
+    assert len(attempts) == 3
+    assert 'API request failed (HTTP 503)' in capsys.readouterr().err
+
+
+def test_call_does_not_retry_4xx(monkeypatch, capsys):
+    attempts = []
+
+    def handler(request):
+        attempts.append(request)
+        return httpx.Response(404)
+    fake_api(monkeypatch, handler)
+    with pytest.raises(main.typer.Exit):
+        main.call('GET', 'me', retries=5)
+    assert len(attempts) == 1
+    captured = capsys.readouterr()
+    assert 'API request failed (HTTP 404)' in captured.out + captured.err
+
+
+def test_login_poll_exhausts_and_exits(tmp_path, monkeypatch):
+    polls = []
+
+    def handler(request):
+        if request.url.path.endswith('/cli-auth'):
+            return httpx.Response(200, json={'id': 'i', 'secret': 's', 'verification_url': 'https://x/approve', 'interval': 0})
+        polls.append(request)
+        raise httpx.ConnectError('down', request=request)
+    fake_api(monkeypatch, handler)
+    monkeypatch.setattr(main, 'config_path', lambda: tmp_path / 'config.json')
+    result = runner.invoke(main.app, ['login', '--no-browser'])
+    assert result.exit_code == 1
+    assert 'Could not reach' in result.output
+    assert len(polls) == 6
+
+
 def test_status_watch_survives_transient_errors(monkeypatch):
     calls = []
 
