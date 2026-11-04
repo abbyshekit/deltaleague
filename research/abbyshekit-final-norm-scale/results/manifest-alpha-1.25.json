@@ -1,0 +1,22 @@
+{
+  "schema_version": "delta.submission.v1",
+  "format": "sparse-diff",
+  "operation": "replace",
+  "reconstruction_version": "delta-reconstruct-v1",
+  "parent_version_id": "0ea62f40-7cd8-4d98-9ebb-484192fa05eb",
+  "parent_content_hash": "708085f8b44fa704601967f3f771b8ec133d9c91dc4f49bd8c7686bd47d537b8",
+  "model_config_id": "qwen35-08b-v1",
+  "tensors": {
+    "model.language_model.norm.weight": {
+      "indices": "t319.indices",
+      "values": "t319.values"
+    }
+  },
+  "artifacts": [
+    {
+      "name": "weights.safetensors",
+      "sha256": "4960af4903d3199c17fef126c6c50b9754ec9aa3d04246f4f577f29c7bc0ce08",
+      "size_bytes": 10400
+    }
+  ]
+}

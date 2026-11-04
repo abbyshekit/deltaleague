@@ -20,6 +20,8 @@ Pre-registered predictions, written before any server score:
 
 These predictions are weak at n = 30 and n = 9; the experiment cannot separate small effects. It can show whether a pure decoding edit is indistinguishable from the published edit on this board.
 
+Second arm, pre-registered before the first arm's score was known (submitted while the first was still queued): α = 1.25, the temperature-0.8 twin (presence penalty 1.2), stored weight `1.25·(1 + w) − 1`, `results/manifest-alpha-1.25.json`. Predictions: truncation between the parent's 56.4% and arm 1's; validation within the same 25-point band; private test within one item. Together the two arms give a dose-response pair for the decoding explanation.
+
 ## Edit
 - Format: sparse diff
 - Tensors touched and changed entries: `model.language_model.norm.weight`, 1,024 entries (`results/manifest.json`)
@@ -45,7 +47,8 @@ delta validate submission-alpha
 Expected: the manifest lists one tensor, `model.language_model.norm.weight`; the artifact SHA-256 is in `results/manifest.json`.
 
 ## Submission (after `delta submit`)
-- Submission id: `8ff0f88e-249e-43ea-9fbd-1668b592ecdb` (submitted 2026-11-04T18:04Z, state `verifying`)
+- Submission id, arm 1 (α = 1.667): `8ff0f88e-249e-43ea-9fbd-1668b592ecdb` (submitted 2026-11-04T18:04Z)
+- Submission id, arm 2 (α = 1.25): filled after submission
 - Version id (from `delta leaderboard --model qwen35-08b-v1`):
 - Official public validation / private test score:
 
