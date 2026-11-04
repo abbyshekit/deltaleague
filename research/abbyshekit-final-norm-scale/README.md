@@ -48,7 +48,7 @@ Expected: the manifest lists one tensor, `model.language_model.norm.weight`; the
 
 ## Submission (after `delta submit`)
 - Submission id, arm 1 (α = 1.667): `8ff0f88e-249e-43ea-9fbd-1668b592ecdb` (submitted 2026-11-04T18:04Z)
-- Submission id, arm 2 (α = 1.25): filled after submission
+- Submission id, arm 2 (α = 1.25): `f7742cff-f016-4ba2-bc04-e734086a331d` (submitted 2026-11-04T18:39Z while arm 1 was still queued)
 - Version id (from `delta leaderboard --model qwen35-08b-v1`):
 - Official public validation / private test score:
 
