@@ -106,9 +106,9 @@ delta grid --cells temp-0.8,no-thinking      # default always runs
 delta grid --grid my-grid.json --output-dir my-grid-results
 ```
 
-Each cell writes `<output-dir>/<cell>.json` and `<cell>.generations.jsonl` in the `delta evaluate` report format, plus `grid_cell` and `grid_overrides`. `grid-summary.json` lists every cell, the best cell (highest validation score; ties go to `default`) and `best_minus_default`. Existing files are never overwritten. `--max-new-tokens` and `--thinking/--no-thinking` apply to every cell; a cell override wins.
+Each cell writes `<output-dir>/<cell>.json` and `<cell>.generations.jsonl` in the `delta evaluate` report format, plus `grid_cell` and `grid_overrides`. `grid-summary.json` lists every cell, the best cell (highest validation score; ties go to `default`) and `best_minus_default`. Results are written to `<output-dir>.partial` and renamed on success; an existing output directory is never overwritten, and a failed run leaves `<output-dir>.partial` with the finished cells (delete it to rerun). `--max-new-tokens` and `--thinking/--no-thinking` apply to every cell; a cell override wins.
 
-A custom grid is a JSON object `{"cell": {"key": value}}`. Allowed keys: `temperature`, `top_p`, `top_k`, `presence_penalty`, `max_tokens`, `enable_thinking`; values are numbers or booleans. A `default: {}` cell is added when none has empty overrides.
+A custom grid is a JSON object `{"cell": {"key": value}}`. Allowed keys: `temperature`, `top_p`, `top_k`, `presence_penalty`, `max_tokens`, `enable_thinking`; values are numbers (`max_tokens` and `top_k` positive integers, the rest non-negative) or, for `enable_thinking`, a boolean. `default` must stay empty and `grid-summary` is reserved. A `default: {}` cell is added when none has empty overrides.
 
 `grid_sha256` in the summary is the SHA-256 of the grid as `json.dumps(grid, sort_keys=True, separators=(',', ':'))`. `preregistered` is true only when the grid equals the built-in table above, so the hash fixes the settings before any score is seen.
 

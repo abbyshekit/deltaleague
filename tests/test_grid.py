@@ -2,46 +2,16 @@ import hashlib
 import json
 
 import pytest
-import torch
-from safetensors.torch import save_file
 from typer.testing import CliRunner
 
-from delta_cli import local, main
-from delta_cli.artifacts import file_hash
-from delta_cli.grid import DEFAULT_GRID, grid_hash
+from delta_cli import main
+from delta_cli.grid import DEFAULT_GRID, best_cell, grid_hash, load_grid
 
 
 @pytest.fixture
-def workspace(tmp_path):
-    model = tmp_path / 'model'
-    model.mkdir()
-    save_file({'layer.weight': torch.tensor([1., 2.])}, str(model / 'model.safetensors'))
-    (model / 'config.json').write_text('{}')
-    metadata = {'id': '00000000-0000-0000-0000-000000000002', 'model_id': 'tiny', 'content_hash': 'a' * 64, 'files': [
-        {'name': p.name, 'size_bytes': p.stat().st_size, 'sha256': file_hash(p)} for p in model.iterdir()]}
-    (model / 'delta-model.json').write_text(json.dumps(metadata))
-    data = {'a': [{'id': 'a1', 'prompt': 'A', 'answer': 'yes', 'samples': 2}],
-            'b': [{'id': 'b1', 'prompt': 'B', 'answer': 'yes'}, {'id': 'b2', 'prompt': 'C', 'answer': 'yes'}]}
-    (tmp_path / 'validation.json').write_text(json.dumps(data))
-    config = {'id': 'tiny-v1', 'model_id': 'tiny', 'generation': {'max_tokens': 20, 'temperature': .6},
-              'validation_names': list(data), 'validation_sha256': file_hash(tmp_path / 'validation.json')}
-    (tmp_path / 'evaluation.json').write_text(json.dumps(config))
-    (tmp_path / 'delta-workspace.json').write_text(json.dumps({'model_id': 'tiny', 'config_id': 'tiny-v1', 'parent_version_id': '00000000-0000-0000-0000-000000000002'}))
-    return tmp_path, metadata, config
-
-
-@pytest.fixture
-def calls(monkeypatch):
+def calls(fake_runner):
     seen = []
-    class FakeRunner:
-        details = {'device': 'cpu'}
-        def __init__(self, *args):
-            pass
-        def generate(self, prompt, generation, seed):
-            seen.append(generation)
-            return {'text': 'yes' if generation.get('temperature', .6) <= .6 else 'no', 'tokens': 2,
-                    'generation_seconds': .1, 'truncated': False}
-    monkeypatch.setattr(local, 'Runner', FakeRunner)
+    fake_runner(lambda g: 'yes' if g.get('temperature', .6) <= .6 else 'no', seen=seen)
     return seen
 
 
@@ -68,6 +38,7 @@ def test_grid_reports_and_summary(workspace, calls):
     assert [c['name'] for c in summary['cells']] == list(DEFAULT_GRID)
     assert {'local_only', 'model_id', 'config_id', 'source_version_id', 'artifact', 'selected_benchmarks', 'note'} <= set(summary)
     assert 'Best: default' in result.output
+    assert not out.with_name('grid-results.partial').exists()
 
 
 def test_custom_grid_rejects_unknown_key(workspace, calls):
@@ -99,16 +70,9 @@ def test_max_new_tokens_reaches_every_cell(workspace, calls):
     assert json.loads((root / 'g/temp-0.6.json').read_text())['generation']['max_tokens'] == 4
 
 
-def test_non_default_cell_can_win(workspace, monkeypatch):
+def test_non_default_cell_can_win(workspace, fake_runner):
     root, _, _ = workspace
-    class HotRunner:
-        details = {'device': 'cpu'}
-        def __init__(self, *args):
-            pass
-        def generate(self, prompt, generation, seed):
-            return {'text': 'yes' if generation.get('temperature', .6) >= .8 else 'no', 'tokens': 1,
-                    'generation_seconds': .1, 'truncated': False}
-    monkeypatch.setattr(local, 'Runner', HotRunner)
+    fake_runner(lambda g: 'yes' if g.get('temperature', .6) >= .8 else 'no')
     (root / 'grid.json').write_text(json.dumps({'hot': {'temperature': .8}}))
     result = CliRunner().invoke(main.app, ['grid', '--workspace', str(root), '--grid', str(root / 'grid.json'), '--output-dir', str(root / 'g')])
     assert result.exit_code == 0, result.output
@@ -116,3 +80,55 @@ def test_non_default_cell_can_win(workspace, monkeypatch):
     assert summary['best_cell'] == 'hot' and summary['best_minus_default'] == 100 and summary['preregistered'] is False
     assert [c['name'] for c in summary['cells']] == ['default', 'hot']
     assert 'Best: hot 100.0 (+100.0 over default)' in result.output
+
+
+@pytest.mark.parametrize('content', [[], {}, {'a b': {}}, {'x': 'x'}, {'x': {'temperature': '0.6'}},
+                                     {'x': {'max_tokens': True}}, {'x': {'max_tokens': 0}}, {'x': {'temperature': -1}},
+                                     {'x': {'enable_thinking': 1}}, {'default': {'temperature': .8}}, {'grid-summary': {}}])
+def test_load_grid_rejects_bad_shapes(tmp_path, content):
+    path = tmp_path / 'grid.json'
+    path.write_text(json.dumps(content))
+    with pytest.raises(ValueError):
+        load_grid(path)
+
+
+def test_unknown_cell_fails_before_generating(workspace, calls):
+    root, _, _ = workspace
+    result = CliRunner().invoke(main.app, ['grid', '--workspace', str(root), '--cells', 'nope', '--output-dir', str(root / 'g')])
+    assert result.exit_code == 1 and 'Unknown cell(s)' in result.output
+    assert not calls and not (root / 'g').exists() and not (root / 'g.partial').exists()
+
+
+def test_tie_prefers_default_over_earlier_cell():
+    cells = [{'name': 'hot', 'validation_score': 5}, {'name': 'default', 'validation_score': 5}]
+    assert best_cell(cells, 'default') == 'default'
+    assert best_cell([{'name': 'a', 'validation_score': 5}, {'name': 'b', 'validation_score': 5}, {'name': 'default', 'validation_score': 1}], 'default') == 'a'
+
+
+def test_report_flags_overridden_cells_and_budget(workspace, calls):
+    root, _, _ = workspace
+    result = CliRunner().invoke(main.app, ['grid', '--workspace', str(root), '--output-dir', str(root / 'g')])
+    assert result.exit_code == 0, result.output
+    assert 'up to 480 output tokens' in result.output
+    assert json.loads((root / 'g/default.json').read_text())['generation_overridden'] is False
+    assert json.loads((root / 'g/temp-0.8.json').read_text())['generation_overridden'] is True
+    result = CliRunner().invoke(main.app, ['grid', '--workspace', str(root), '--max-new-tokens', '4', '--output-dir', str(root / 'h')])
+    assert result.exit_code == 0, result.output
+    assert 'up to 96 output tokens' in result.output
+
+
+def test_failed_run_leaves_partial_and_blocks_rerun(workspace, fake_runner):
+    root, _, _ = workspace
+
+    def answer(generation):
+        if generation.get('temperature') == .8:
+            raise RuntimeError('boom')
+        return 'yes'
+    fake_runner(answer)
+    (root / 'grid.json').write_text(json.dumps({'hot': {'temperature': .8}}))
+    args = ['grid', '--workspace', str(root), '--grid', str(root / 'grid.json'), '--output-dir', str(root / 'g')]
+    result = CliRunner().invoke(main.app, args)
+    assert result.exit_code == 1 and 'boom' in result.output
+    assert (root / 'g.partial/default.json').exists() and not (root / 'g').exists()
+    result = CliRunner().invoke(main.app, args)
+    assert result.exit_code == 1 and 'already exists' in result.output

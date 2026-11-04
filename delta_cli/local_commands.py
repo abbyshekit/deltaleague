@@ -11,6 +11,35 @@ import typer
 
 from . import local
 
+NOTE = 'Advisory local score. Hardware/backend differences affect results; this is not a verified leaderboard score.'
+
+
+def generation_for(config, max_new_tokens, thinking):
+    """Config generation block with the CLI overrides applied."""
+    overrides = (('max_tokens', max_new_tokens), ('enable_thinking', thinking))
+    return {**config['generation'], **{k: v for k, v in overrides if v is not None}}
+
+
+def budget_line(cells):
+    """Echo the generation count and output-token ceiling for [(generation, task_count), ...]."""
+    count = sum(n for _, n in cells)
+    tokens = sum(n * g.get('max_tokens', local.MAX_TOKENS) for g, n in cells)
+    typer.echo(f'{count} generations; up to {tokens:,} output tokens. Use --limit and --max-new-tokens for a quick check.', err=True)
+
+
+def write_report(runner, details, config, tasks, names, full, limit, generation, output, progress, recorded_output=None, **extra):
+    """Evaluate, then write the generations file and the report beside `output`."""
+    generations = local.generations_path(output)
+    with generations.open('x') as stream:
+        result = local.evaluate(runner, tasks, generation, stream, progress)
+    report = {**details, **result, 'generation': generation, 'generation_overridden': generation != config['generation'],
+              'complete': True, 'full_validation_set': full, 'selected_benchmarks': names,
+              'examples_per_benchmark_limit': limit, 'validation_sha256': config['validation_sha256'],
+              'generations_file': str(local.generations_path(recorded_output or output)), 'note': NOTE, **extra}
+    with output.open('x') as stream:
+        json.dump(report, stream, indent=2)
+    return report
+
 
 def fail(exc):
     if isinstance(exc, ImportError):
@@ -35,11 +64,7 @@ def experiment(workspace, version_id, weights, patch, device, max_new_tokens, th
             raise ValueError('Leaderboard version belongs to another model. Initialize that competition first.')
         parent = workspace / '.delta/models' / version_id
         metadata = pull_model(version_id, parent)
-    generation = dict(config['generation'])
-    if max_new_tokens is not None:
-        generation['max_tokens'] = max_new_tokens
-    if thinking is not None:
-        generation['enable_thinking'] = thinking
+    generation = generation_for(config, max_new_tokens, thinking)
     if sys.platform == 'darwin' and device in {'auto', 'mps'}:
         os.environ.setdefault('PYTORCH_ENABLE_MPS_FALLBACK', '1')
     typer.echo('Checking model artifacts…', err=True)
@@ -85,22 +110,13 @@ def evaluate(workspace: Path = Path('.'), version: str | None = None,
         root, _, config, _ = local.read_workspace(workspace)
         tasks, names, full = local.public_examples(root, config, benchmark, limit)
         output = output.resolve()
-        generations = local.generations_path(output)
-        if output.exists() or generations.exists():
+        if output.exists() or local.generations_path(output).exists():
             raise ValueError('Output already exists. Choose a new --output path to preserve previous results.')
         output.parent.mkdir(parents=True, exist_ok=True)
-        budget = max_new_tokens or config['generation'].get('max_tokens', 32768)
-        typer.echo(f'{len(tasks)} generations; up to {len(tasks) * budget:,} output tokens. Use --limit and --max-new-tokens for a quick check.', err=True)
+        budget_line([(generation_for(config, max_new_tokens, thinking), len(tasks))])
         with experiment(workspace, version, weights, patch, device, max_new_tokens, thinking) as (runner, details):
-            with generations.open('x') as stream:
-                result = local.evaluate(runner, tasks, details['generation'], stream,
-                    lambda index, total, name: typer.echo(f'[{index}/{total}] {name}', err=True))
-            report = {**details, **result, 'complete': True, 'full_validation_set': full,
-                      'selected_benchmarks': names, 'examples_per_benchmark_limit': limit,
-                      'validation_sha256': config['validation_sha256'], 'generations_file': str(generations),
-                      'note': 'Advisory local score. Hardware/backend differences affect results; this is not a verified leaderboard score.'}
-            with output.open('x') as stream:
-                json.dump(report, stream, indent=2)
+            report = write_report(runner, details, config, tasks, names, full, limit, details['generation'], output,
+                lambda index, total, name: typer.echo(f'[{index}/{total}] {name}', err=True))
             typer.echo(json.dumps(report, indent=2))
             typer.echo(f'Saved {output}', err=True)
     except (ImportError, OSError, ValueError, KeyError, RuntimeError) as exc:

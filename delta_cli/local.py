@@ -11,6 +11,8 @@ import time
 from .artifacts import file_hash, reconstruct, validate_manifest
 from .scoring import score_answer
 
+MAX_TOKENS = 32768
+
 
 def read_workspace(workspace):
     workspace = Path(workspace).resolve()
@@ -108,7 +110,7 @@ class Runner:
                     add_generation_prompt=True, enable_thinking=generation.get('enable_thinking', True))
         inputs = self.tokenizer(rendered, return_tensors='pt', add_special_tokens=False).to(self.device)
         prompt_length = inputs['input_ids'].shape[1]
-        max_tokens = generation.get('max_tokens', 32768)
+        max_tokens = generation.get('max_tokens', MAX_TOKENS)
         if prompt_length + max_tokens > generation.get('max_model_len', 34816):
             raise ValueError('Prompt plus output budget exceeds max_model_len; reduce --max-new-tokens.')
         penalty = generation.get('presence_penalty', 1.5)
