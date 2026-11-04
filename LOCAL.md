@@ -86,3 +86,30 @@ delta compare baseline-quick.json edit-quick.json --resamples 10000 --seed 0 --j
 Per benchmark it reports `n`, both means, the difference, a paired percentile bootstrap 95% interval (examples resampled with replacement; `--resamples` defaults to 10,000, `--seed` to 0), wins, losses, and ties of the candidate, an exact two-sided sign test on the discordant pairs, truncation rates, mean output tokens, and `run_worst_case_se`, the worst-case standard error of one run's mean, `50/sqrt(n)` points. The overall difference uses the platform's equal-weight mean of benchmark means, bootstrapped jointly by resampling within each benchmark; its `run_worst_case_se` is `100 * sqrt(sum(0.25 / n_b)) / B` points for `B` benchmarks. The verdict always adds that two runs separate at about 2.8 times this value (`1.96 * sqrt(2)`). The overall result also carries pooled `wins`, `losses`, `ties`, and an exact two-sided `sign_test_p` across all paired examples, and is `separable` only when its interval excludes 0 and `sign_test_p` is below 0.05.
 
 `--json` prints the full structure and `--output` writes it; an existing output file is never overwritten. The comparison is advisory: official validation and private test scores are authoritative.
+
+## Decoding grid
+
+`delta grid` evaluates one checkpoint under a fixed set of decoding settings, loading the model once. Each cell overrides the generation block of `evaluation.json`:
+
+| Cell | Overrides |
+| --- | --- |
+| `default` | none |
+| `temp-0.6` | `temperature 0.6` |
+| `temp-0.8` | `temperature 0.8` |
+| `presence-0.5` | `presence_penalty 0.5` |
+| `no-thinking` | `enable_thinking false` |
+| `temp-0.6-no-thinking` | `temperature 0.6`, `enable_thinking false` |
+
+```sh
+delta grid --limit 2 --max-new-tokens 256
+delta grid --cells temp-0.8,no-thinking      # default always runs
+delta grid --grid my-grid.json --output-dir my-grid-results
+```
+
+Each cell writes `<output-dir>/<cell>.json` and `<cell>.generations.jsonl` in the `delta evaluate` report format, plus `grid_cell` and `grid_overrides`. `grid-summary.json` lists every cell, the best cell (highest validation score; ties go to `default`) and `best_minus_default`. Existing files are never overwritten. `--max-new-tokens` and `--thinking/--no-thinking` apply to every cell; a cell override wins.
+
+A custom grid is a JSON object `{"cell": {"key": value}}`. Allowed keys: `temperature`, `top_p`, `top_k`, `presence_penalty`, `max_tokens`, `enable_thinking`; values are numbers or booleans. A `default: {}` cell is added when none has empty overrides.
+
+`grid_sha256` in the summary is the SHA-256 of the grid as `json.dumps(grid, sort_keys=True, separators=(',', ':'))`. `preregistered` is true only when the grid equals the built-in table above, so the hash fixes the settings before any score is seen.
+
+Cost is cells × a full evaluation: the default grid runs six. Use `--limit`, `--cells` and `--max-new-tokens` for a quick check; the CLI prints the generation count and token ceiling before loading the model.
