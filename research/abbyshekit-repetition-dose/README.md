@@ -59,7 +59,7 @@ The published notes give the cost side at scale 6 (temperature 0.6): 179 wrong-b
 Local estimates only; the generation screen is capped at 4,096 tokens, so it measures loop onset and degeneration, not closure at the server budget.
 
 ## Submission
-- Arm 1 (K = 1.5): pending
+- Arm 1 (K = 1.5): submission `a6ddce3e-b337-4249-b893-6dfd6a4c51dc`, submitted 2026-11-05T00:06Z on `public-ladder500-8k-v2`
 - Arm 2 (K = 2.0): pending
 - Official public validation / private test: pending
 
