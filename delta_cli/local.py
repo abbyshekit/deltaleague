@@ -165,6 +165,20 @@ def load_validation(path, config=None):
     return data, names, sha
 
 
+def check_scorer_fields(example, scorer):
+    """Require only the fields delta_cli.scoring reads for this scorer."""
+    if scorer == 'ifeval':
+        ids, kwargs = example.get('instruction_id_list'), example.get('kwargs')
+        if not (isinstance(ids, list) and ids and all(isinstance(i, str) and i for i in ids)):
+            raise ValueError(f"Example {example['id']} (ifeval) needs instruction_id_list: a non-empty list of instruction ids.")
+        if not (isinstance(kwargs, list) and len(kwargs) == len(ids) and all(isinstance(k, dict) for k in kwargs)):
+            raise ValueError(f"Example {example['id']} (ifeval) needs kwargs: a list of objects, one per instruction id.")
+        return
+    answer = example.get('answer')
+    if isinstance(answer, bool) or not (isinstance(answer, (int, float)) or isinstance(answer, str) and answer):
+        raise ValueError(f"Example {example['id']} ({scorer}) needs answer: a non-empty string or a number.")
+
+
 def public_examples(workspace, config, benchmark=None, limit=None, validation_file=None):
     data, names, sha = load_validation(validation_file or workspace / 'validation.json',
                                        None if validation_file else config)
@@ -176,11 +190,12 @@ def public_examples(workspace, config, benchmark=None, limit=None, validation_fi
         if not data[name]:
             raise ValueError(f'Empty benchmark: {name}')
         for index, example in enumerate(data[name][:limit] if limit else data[name]):
-            if not all(isinstance(example.get(k), str) and example[k] for k in ('id', 'prompt')) or 'answer' not in example:
-                raise ValueError('Validation examples need id, prompt and answer.')
+            if not all(isinstance(example.get(k), str) and example[k] for k in ('id', 'prompt')):
+                raise ValueError('Validation examples need id and prompt.')
             scorer = example.get('scorer', 'exact')
             if scorer not in {'exact', 'choice', 'math', 'ifeval'}:
                 raise ValueError(f'Unsupported scorer: {scorer}')
+            check_scorer_fields(example, scorer)
             # Fail on missing scoring dependencies before spending time on inference.
             if scorer == 'math':
                 __import__('math_verify')

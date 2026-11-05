@@ -1,7 +1,8 @@
 import hashlib
 import io
 import json
-from types import SimpleNamespace
+import sys
+from types import ModuleType, SimpleNamespace
 
 import pytest
 import torch
@@ -162,13 +163,47 @@ def test_load_validation(workspace):
     assert len(tasks) == 1 and full is False
     for content, message in [('{}', 'example objects'), ('{"b": ["text"]}', 'example objects'), ('nope', 'Cannot read'),
                              ('{"c": [{"id": "c1", "prompt": "P", "answer": "yes", "scorer": "nope"}]}', 'Unsupported scorer'),
-                             ('{"c": [{"prompt": "P", "answer": "yes"}]}', 'need id')]:
+                             ('{"c": [{"prompt": "P", "answer": "yes"}]}', 'need id and prompt')]:
         path.write_text(content)
         with pytest.raises(ValueError, match=message):
             local.public_examples(root, config, validation_file=path)
     path.write_bytes(raw)
     with pytest.raises(ValueError, match='changed'):
         local.load_validation(path, {**config, 'validation_names': ['c']})
+
+
+def test_scorer_specific_fields(workspace, monkeypatch):
+    root, _, config = workspace
+    path = root / 'scorers.json'
+    # lm_eval is optional; stub the dependency pre-import so ifeval validation runs without it.
+    for name in ('lm_eval', 'lm_eval.tasks', 'lm_eval.tasks.ifeval', 'lm_eval.tasks.ifeval.instructions_registry'):
+        monkeypatch.setitem(sys.modules, name, ModuleType(name))
+    monkeypatch.setitem(sys.modules, 'math_verify', ModuleType('math_verify'))
+
+    def check(example):
+        path.write_text(json.dumps({'c': [{'id': 'c1', 'prompt': 'P', **example}]}))
+        return local.public_examples(root, config, validation_file=path)[0]
+
+    ifeval = {'scorer': 'ifeval', 'instruction_id_list': ['length_constraints:number_words'], 'kwargs': [{'num_words': 5, 'relation': None}]}
+    assert len(check(ifeval)) == 1  # no answer needed
+    assert len(check({**ifeval, 'answer': 'ignored'})) == 1
+    for bad, message in [({k: v for k, v in ifeval.items() if k != 'instruction_id_list'}, 'c1 .ifeval. needs instruction_id_list'),
+                         ({**ifeval, 'instruction_id_list': []}, 'needs instruction_id_list'),
+                         ({**ifeval, 'instruction_id_list': ['']}, 'needs instruction_id_list'),
+                         ({**ifeval, 'kwargs': []}, 'c1 .ifeval. needs kwargs'),
+                         ({**ifeval, 'kwargs': [{}, {}]}, 'needs kwargs'),
+                         ({**ifeval, 'kwargs': [None]}, 'needs kwargs'),
+                         ({k: v for k, v in ifeval.items() if k != 'kwargs'}, 'needs kwargs')]:
+        with pytest.raises(ValueError, match=message):
+            check(bad)
+    for scorer in ('exact', 'choice', 'math'):
+        for answer in ('x', 3, 2.5):
+            assert len(check({'scorer': scorer, 'answer': answer})) == 1
+        for bad in ({}, {'answer': None}, {'answer': ''}, {'answer': True}, {'answer': ['x']}):
+            with pytest.raises(ValueError, match=f'c1 .{scorer}. needs answer'):
+                check({'scorer': scorer, **bad})
+    with pytest.raises(ValueError, match='c1 .exact. needs answer'):
+        check({})  # default scorer is exact
 
 
 def test_cli_custom_validation_file(workspace, fake_runner):

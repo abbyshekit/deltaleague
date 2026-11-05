@@ -72,6 +72,8 @@ To evaluate your own items (a held-out set, extra samples), pass `--validation F
 {"my-set": [{"id": "q1", "prompt": "What is 2 + 2?", "answer": "4", "scorer": "math", "samples": 2}]}
 ```
 
+Every item needs `id` and `prompt`. `exact`, `choice` and `math` also need `answer` (a non-empty string or a number); `ifeval` needs `instruction_id_list` and a same-length `kwargs` list of objects instead, and no `answer`.
+
 The report's `validation_sha256` is the hash of that file, `validation_file` records its path, and `full_validation_set` is false. `--benchmark` and `--limit` still apply.
 
 Full evaluation can be expensive locally: the starter configuration permits 32,768 generated tokens per example. The CLI prints the number of generations and upper token budget before loading the model. Use Ctrl-C to interrupt. Completed generation records remain in the JSONL file; no complete score report is written for an interrupted run. Choose a fresh output filename to rerun; automatic resume is not implemented.
