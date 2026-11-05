@@ -1,11 +1,11 @@
-# Final-norm scale: a weight edit that is only a decoding change
+# Final-norm scale: a weight edit equivalent to rescaling every logit
 
 ## Summary
 - Model competition: `qwen35-08b-v1`
 - Parent version id (`parent_version_id` in `delta-workspace.json`): `0ea62f40-7cd8-4d98-9ebb-484192fa05eb`
-- Evaluation config id (`config_id`): `runtime-v5`
+- Evaluation config id (`config_id`): `runtime-v5` (submitted and verified there; the board re-scored both arms under `public-ladder500-8k-v2` on 2026-11-04, see the last section)
 - Submission title (as given to `delta submit --title`): `Final norm gain × 1.667 (temperature-0.6 equivalent)`
-- One sentence: the gain of `model.language_model.norm.weight` is multiplied by α = 1/0.6 and nothing else changes; because the logits are linear in that gain, the edit equals sampling the parent at temperature 0.6 with the presence penalty at 0.9 under the server's fixed decoding.
+- One sentence: the gain of `model.language_model.norm.weight` is multiplied by α = 1/0.6 and nothing else changes; because the logits are linear in that gain, the edit scales every logit by α, which equals sampling the parent at temperature 0.6 with the presence penalty at 0.9 if the server applies penalties before the temperature division (assumed, not verified).
 
 ## Hypothesis
 The server decodes at temperature 1.0, top-p 0.95, top-k 20, presence penalty 1.5, thinking on. That is the setting the Qwen3.5 model card recommends for thinking-mode text tasks (model card, "Best practices"). The same card reports the model's own benchmark scores at temperature 0.6 in thinking mode ("all other benchmarks adopted the same sampling configuration but with temperature=0.6 under the thinking mode"). The published edit's day-one validation gain (two ARC items) arrives with truncation falling from 22 to 14 of 39 generations, and a sharper distribution can shorten thinking traces without changing what the model knows. If a search-free edit that only reproduces temperature 0.6 lands within the tie band of the published edit on public validation and matches it on the private test, the board is rewarding decoding, and an "Original (decoding-tuned)" reference row is needed.
@@ -31,16 +31,18 @@ Second arm, pre-registered before the first arm's score was known (submitted whi
 
 ## Controls
 Needs the CLI with `delta compare` and `delta grid` (#1, #2).
-- Logit linearity (`check_logits.py 1.6666667`, float32 on CPU, three prompts, last-position logits): max |edited − α·base| = 0.028–0.030 on logits of magnitude 24.6–25.2, a relative deviation of 0.11–0.12%; ratio edited/base over the 181k–187k vocabulary entries with |base| > 1: median 1.6676–1.6677, range 1.642–1.693 against the target 1.6667; argmax unchanged on all three. The script exits non-zero above 1% deviation or on an argmax change. Effective per-entry gain after the bfloat16 cast: 1.6632–1.6716.
+- Logit linearity (`check_logits.py 1.6666667`, float32 on CPU, three prompts, last-position logits): max |edited − α·base| = 0.028–0.030 on logits of magnitude 24.6–25.2, a relative deviation of 0.11–0.12%; ratio edited/base over the 181k–187k vocabulary entries with |base| > 1: median 1.6676–1.6677, range 1.642–1.693 against the target 1.6667; argmax unchanged on all three. The script exits non-zero above 1% deviation or on an argmax change. Arm 2 (`check_logits.py 1.25`, same prompts): max |edited − α·base| = 0.025–0.028 on logits of magnitude 24.6–25.2, relative deviation 0.10–0.11%; ratio median 1.2505–1.2507, range 1.231–1.271; argmax unchanged on all three. Effective per-entry gain after the bfloat16 cast: 1.6632–1.6716.
 - Against the parent (`delta compare results/grid-default.json results/alpha-patch.json`; MPS, float32, 2 items per benchmark, 1,024 output tokens, thinking on, 6 generations per run): parent 16.7, patch 16.7, difference 0.0 with CI [0, 0]; both truncate 6 of 6 generations at this budget. Advisory only: every thinking trace exceeds 1,024 tokens, so the quick set measures truncation, not answers.
 - Against the decoding twin (`delta grid --grid grid-alpha.json`, cell `temp-0.6-pp-0.9`, then `delta compare`): twin 33.3 with 5 of 6 truncated, patch 16.7 with 6 of 6; difference −16.7, CI [−33.3, 0], sign test p = 1.0, not separable. Under the same seeds 3 of the 6 generations are identical character for character and the other 3 diverge after 631, 1,114 and 1,247 characters: bfloat16 rounding of α·(1 + w) perturbs the logits by about 0.1%, and one flipped token changes the rest of the sample. Prediction 4's "same scores" was too strong at this budget; the logit-level check above is the equivalence evidence.
 - Scripted baseline: this edit is the scripted baseline; the published edit's reproduction (`examples/blog-reproduction`) is the comparison arm. At the same local budget it scores 0.0 with 6 of 6 truncated (`results/blog-edit.json`, `results/compare-parent-blog.json`).
 
 ## Reproduction
-From a fresh `delta competition init qwen35-08b-v1 --output experiment`, inside `experiment/`:
-```sh
-python scale_norm.py 1.6666667 edited-alpha.safetensors
-python check_logits.py 1.6666667
+From a fresh `delta competition init qwen35-08b-v1 --output experiment`, copy this directory's scripts into the workspace, then work inside `experiment/`:
+```bash
+cp /path/to/deltaleague/research/abbyshekit-final-norm-scale/{scale_norm.py,check_logits.py,grid-alpha.json} experiment/
+cd experiment
+python scale_norm.py 1.6666667 edited-alpha.safetensors      # arm 1; arm 2: python scale_norm.py 1.25 edited-alpha125.safetensors
+python check_logits.py 1.6666667                             # arm 2: 1.25
 delta patch build --parent model --modified edited-alpha.safetensors --output submission-alpha
 delta validate submission-alpha
 ```
@@ -78,6 +80,18 @@ Arm 2 against its predictions: truncation 74.4% lies between the parent's 56.4% 
 | 2. Public validation within 25 points of 40.00 and 46.67 | yes | **13.33**: −26.67 from the parent, −33.33 from the published edit |
 | 3. Private test 33.33 ± one item | yes | **0.00** (0 of 9); the API reports `test_standard_error` 0.0 for it |
 
-Reading. Both edits did what the logit check says they do: it is the parent sampled at an effective temperature of 0.6 with the presence penalty's effective size cut to 0.9. Under the server's 32,768-token budget that combination runs the thinking trace into the cap on 36 of 39 generations, and output tokens rose from 925,615 to 1,196,452, so the mechanism was the opposite of the hypothesis: a weaker effective presence penalty lets the trace loop, and a sharper distribution does not shorten it. The published edit, which cut truncation to 35.9%, is therefore not reproduced by a temperature-0.6 twin, so whatever it does is not "sharpen the distribution". The result does not test a decoding change that keeps the penalty at 1.5, because a weight-only edit cannot move the temperature without moving the penalty; the server would have to run such a cell (proposal 4 in `PROTOCOL.md`). Arm 2 sits between the parent and arm 1 on every column, so the effect is monotone in α: every step of logit scaling with the coupled penalty reduction costs truncation, validation and private-test items together. The published edit moves every column the other way, which is the clearest evidence yet that it is not a decoding change in disguise.
+Reading. Both edits scale every logit by α, as the logit checks for both arms show. Under the vLLM v1 sampler order described above that is the parent at an effective temperature of 1/α with the presence penalty's effective size at 1.5/α; the server's order is not verified, and with the penalty applied after the temperature it would be temperature 1/α with the full penalty. Under the 32,768-token budget arm 1's setting ran the thinking trace into the cap on 36 of 39 generations, and output tokens rose from 925,615 to 1,196,452: the coupled change lengthened traces instead of shortening them (one run per arm). The two arms cannot say whether the lower effective penalty, the sharper distribution, or both did it, because they move together in every arm. What they establish is narrower: these two coupled settings (effective temperature 0.6 or 0.8 with the penalty scaled the same way) did not reproduce the published edit's `runtime-v5` result, which cut truncation to 35.9%. They do not rule out other decoding changes, including a sharper distribution with the penalty kept at 1.5, which a weight-only edit of this kind cannot express; the server would have to run such a cell (proposal 4 in `PROTOCOL.md`). Arm 2 sits between the parent and arm 1 on every column, so across these three points the effect of the coupled change is monotone in α.
 
-Two facts for the protocol discussion. The server's `test_standard_error` is a sample estimate: it reports 0.0 when an entry scores 0 of 9, which understates the uncertainty of a 9-item test (the worst-case bound is 16.7 points). And the day-one scores of the parent and the published edit now sit two full tie bands above this entry on validation, which is the first result on this board that the board's own error bars can resolve.
+Two facts for the protocol discussion. The server's `test_standard_error` is a sample estimate: it reports 0.0 when an entry scores 0 of 9, which understates the uncertainty of a 9-item test (the worst-case bound is 16.7 points). And on validation the parent and the published edit sit 26.67 and 33.33 points above arm 1, about 1.07 and 1.33 times the 25-point unpaired worst-case band at n = 30.
+
+## Re-scored under `public-ladder500-8k-v2`
+On 2026-11-04 the board moved to `public-ladder500-8k-v2` (18 public validation benchmarks, 1,110 items; a provisional private test of 500 items; 8,192 output tokens; the same sampler otherwise) and re-ran every version, these two arms included (results completed 23:32–23:48 UTC):
+
+| Version | Public validation | Private test ± `test_standard_error` | `truncation_rate` | Output tokens |
+|---|---|---|---|---|
+| Original model | 41.83 | 18.6 ± 1.74 | 74.6% | 3,583,738 |
+| Arm 2, α = 1.25 | 41.45 | 19.0 ± 1.76 | 75.6% | 3,567,886 |
+| Arm 1, α = 1.667 | 41.89 | 17.2 ± 1.69 | 82.6% | 3,645,515 |
+| Published edit | 41.26 | 19.0 ± 1.76 | 71.6% | 3,516,881 |
+
+The `runtime-v5` validation and private-test drops do not reappear as gaps larger than the unpaired band: the four versions are within 0.63 points on validation and 1.8 points on the private test, where the band built from the reported standard errors is about 4.8 points (validation reports no standard error), and paired results from the evaluator would be needed to say whether any two differ. `truncation_rate` still rises with α (74.6%, 75.6%, 82.6%; one run per version). The `runtime-v5` results above rest on 30 validation and 9 private items and are not replicated here.
