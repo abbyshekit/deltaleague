@@ -2,8 +2,11 @@
 
 Vetoes (each recorded): a GSM program that does not return the stated answer; a MATH answer math-verify cannot parse;
 a solver answer math-verify does not accept against the writer's; a 10-gram overlap with any public test item (ARC: on the stem only) or a public ARC question contained in the item;
-a duplicate inside the set. Usage: build_heldout.py RESULT.json [RESULT2.json ...] OUT_DIR
+a duplicate inside the set; with --exclude, a 10-gram overlap with or a duplicate of any item of an earlier set (validation.json format).
+Usage: build_heldout.py [--exclude EARLIER.json ...] RESULT.json [RESULT2.json ...] OUT_DIR
+Private fields the workflow attaches to an item (solutions, programs, solver answers, solver_flags) pass through to the private sidecar.
 """
+import argparse
 import hashlib
 import json
 import ast
@@ -17,7 +20,13 @@ from pathlib import Path
 from math_verify import parse, verify
 from math_verify.parser import ExprExtractionConfig, LatexExtractionConfig
 
-inputs, out = sys.argv[1:-1], Path(sys.argv[-1]); out.mkdir(parents=True, exist_ok=True)
+ap = argparse.ArgumentParser(usage='build_heldout.py [--exclude EARLIER.json ...] RESULT.json [RESULT2.json ...] OUT_DIR')
+ap.add_argument('--exclude', action='append', default=[], metavar='PATH', help='earlier set in validation.json format; repeatable')
+ap.add_argument('paths', nargs='+', help='workflow result JSONs followed by OUT_DIR')
+cli = ap.parse_intermixed_args()
+if len(cli.paths) < 2:
+    ap.error('need at least one RESULT.json and OUT_DIR')
+inputs, out = cli.paths[:-1], Path(cli.paths[-1]); out.mkdir(parents=True, exist_ok=True)
 merged = {}
 for path in inputs:
     for fam in json.loads(Path(path).read_text(encoding='utf-8'))['families']:
@@ -43,6 +52,13 @@ PUBLIC_GRAMS = {name: set().union(*(grams(t) for t in texts)) for name, texts in
 ALL_PUBLIC_GRAMS = set().union(*PUBLIC_GRAMS.values())
 ARC_NORM = {' '.join(words(q)) for q in PUBLIC['arc_challenge']}
 ARC_NORM = {f' {q} ' for q in ARC_NORM if len(q.split()) >= 4}
+EXCLUDE_GRAMS, EXCLUDE_KEYS, EXCLUDE_COUNTS = set(), set(), {}
+for path in cli.exclude:
+    for fam_name, rows in json.loads(Path(path).read_text(encoding='utf-8')).items():
+        for row in rows:
+            ex_body = row['prompt'].split('\nPlease reason step by step')[0]
+            EXCLUDE_GRAMS |= grams(ex_body); EXCLUDE_KEYS.add(' '.join(words(ex_body))[:90])
+            EXCLUDE_COUNTS[fam_name] = EXCLUDE_COUNTS.get(fam_name, 0) + 1
 
 
 def mv_equal(gold, pred):
@@ -124,9 +140,13 @@ for fam in result['families']:
             contained = [q for q in ARC_NORM if q in f' {norm} ']
             if contained:
                 reasons.append('contains a public ARC question: ' + contained[0].strip()[:80])
+        if EXCLUDE_GRAMS and (hit := grams(body) & EXCLUDE_GRAMS):
+            reasons.append('10-gram overlap with an excluded item: ' + sorted(hit)[0][:80])
         k = norm[:90]
         if k in seen:
             reasons.append('duplicate body')
+        if k in EXCLUDE_KEYS:
+            reasons.append('duplicate of an excluded item')
         if name == 'gsm_fresh':
             try:
                 numeric = float(str(it['answer']).replace(',', ''))
@@ -198,5 +218,6 @@ digest = hashlib.sha256(data).hexdigest()
 (out / 'heldout-v1.sha256').write_text(digest + '  heldout-v1.json\n', encoding='utf-8')
 report['sha256'] = digest
 report['public_sets'] = {name: len(texts) for name, texts in PUBLIC.items()}
+report['excluded'] = {'files': len(cli.exclude), 'items': sum(EXCLUDE_COUNTS.values()), 'by_family': EXCLUDE_COUNTS}
 (out / 'report.json').write_text(json.dumps(report, indent=1), encoding='utf-8')
 print(json.dumps(report, indent=1))

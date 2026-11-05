@@ -24,6 +24,7 @@ const EQUIV = { type: 'object', properties: { verdicts: { type: 'array', items: 
 const norm = (s) => String(s ?? '').replace(/\\boxed\{([^}]*)\}/, '$1').replace(/\$/g, '').replace(/\s+/g, '').replace(/\.$/, '').replace(/^\\text\{(.*)\}$/, '$1').toLowerCase()
 const numEq = (a, b) => { const x = parseFloat(a.replace(/,/g, '')), y = parseFloat(b.replace(/,/g, '')); return Number.isFinite(x) && Number.isFinite(y) && Math.abs(x - y) < 1e-9 }
 const same = (fam, a, b) => norm(a) === norm(b) || (fam.numeric && numEq(norm(a), norm(b)))
+const flags = (r) => (r ? { confident: r.confident ?? null, ambiguous: r.ambiguous ?? null, issue: r.issue || '' } : null)
 const key = (body) => body.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim().slice(0, 90)
 
 function writerPrompt(fam, batch, topics) {
@@ -42,7 +43,7 @@ ${ex}`
 function solverPrompt(fam, items, adversarial) {
   const list = items.map((it, i) => `[${i}]\n${it.body}`).join('\n\n')
   return `Solve each item below independently. ${fam.answerRules}
-${adversarial ? 'You are the adversarial solver: for each item also decide whether it is ambiguous, underspecified, has more than one defensible answer, has no correct option, or contains an error; set "ambiguous": true and explain in "issue" when so. Be strict: a competition grader must be able to mark it with no judgement calls.' : 'Set "confident": true only when you have checked the answer; otherwise false with the doubt in "issue". Set "ambiguous": false unless the item cannot be answered as written.'}
+${adversarial ? 'You are the adversarial solver: for each item also decide whether it is ambiguous, underspecified, has more than one defensible answer, has no correct option, or contains an error; set "ambiguous": true and explain in "issue" when so. Be strict: a competition grader must be able to mark it with no judgement calls. Set "confident": true only when you have checked your answer; otherwise false with the doubt in "issue".' : 'Set "confident": true only when you have checked the answer; otherwise false with the doubt in "issue". Set "ambiguous": false unless the item cannot be answered as written.'}
 Return one entry per index with the final answer in canonical form (no \\boxed, no units unless the item asks for them).
 
 ${list}`
@@ -78,23 +79,27 @@ async function runBatch(fam, batch, topics) {
     const ra = A[i], rb = B[i], rc = C[i]
     const reasons = []
     if (!ra || !rb || !rc) reasons.push('missing verdict')
-    if (rb && rb.ambiguous) reasons.push('adversarial solver: ' + (rb.issue || 'ambiguous'))
-    if (ra && ra.confident === false) reasons.push('solver A not confident: ' + (ra.issue || ''))
+    for (const [who, r] of [['A', ra], ['B', rb]]) {
+      if (!r) continue
+      if (r.ambiguous === true) reasons.push(`solver ${who} ambiguous: ` + (r.issue || 'ambiguous'))
+      if (r.confident !== true) reasons.push(`solver ${who} not confident: ` + (r.issue || ''))
+    }
+    const solver_flags = { a: flags(ra), b: flags(rb) }
     if (rc && !rc.keep) reasons.push('critic: ' + rc.reason)
     if (rc && rc.resembles_known) reasons.push('resembles known: ' + rc.reason)
     const agreeA = ra && same(fam, it.answer, ra.answer), agreeB = rb && same(fam, it.answer, rb.answer)
-    if (reasons.length) rejected.push({ item: it, reasons, a: ra?.answer, b: rb?.answer })
-    else if (agreeA && agreeB) accepted.push({ ...it, a: ra.answer, b: rb.answer })
-    else if (fam.numeric || fam.letter) rejected.push({ item: it, reasons: [`answers disagree: writer ${it.answer}, A ${ra.answer}, B ${rb.answer}`], a: ra.answer, b: rb.answer })
-    else differ.push({ index: i, body: it.body, writer: it.answer, a: ra.answer, b: rb.answer, it, ra, rb })
+    if (reasons.length) rejected.push({ item: it, reasons, a: ra?.answer, b: rb?.answer, solver_flags })
+    else if (agreeA && agreeB) accepted.push({ ...it, a: ra.answer, b: rb.answer, solver_flags })
+    else if (fam.numeric || fam.letter) rejected.push({ item: it, reasons: [`answers disagree: writer ${it.answer}, A ${ra.answer}, B ${rb.answer}`], a: ra.answer, b: rb.answer, solver_flags })
+    else differ.push({ index: i, body: it.body, writer: it.answer, a: ra.answer, b: rb.answer, it, solver_flags })
   })
   if (differ.length) {
     const e = await agent(equivPrompt(fam, differ), { label: `equiv:${fam.name}:${batch}`, phase: 'Judge', schema: EQUIV, model: 'sonnet' })
     const E = byIdx(e, 'verdicts')
     for (const d of differ) {
       const v = E[d.index]
-      if (v && v.equivalent) accepted.push({ ...d.it, answer: v.canonical || d.it.answer, a: d.a, b: d.b, equivalence_judged: true })
-      else rejected.push({ item: d.it, reasons: [`answers differ and not judged equivalent: writer ${d.writer}, A ${d.a}, B ${d.b}`], a: d.a, b: d.b })
+      if (v && v.equivalent) accepted.push({ ...d.it, answer: v.canonical || d.it.answer, a: d.a, b: d.b, solver_flags: d.solver_flags, equivalence_judged: true })
+      else rejected.push({ item: d.it, reasons: [`answers differ and not judged equivalent: writer ${d.writer}, A ${d.a}, B ${d.b}`], a: d.a, b: d.b, solver_flags: d.solver_flags })
     }
   }
   return { items, accepted, rejected }
@@ -122,8 +127,8 @@ async function runFamily(fam) {
     log(`${fam.name}: round ${round}, ${n} batches, +${fresh} accepted (${accepted.length}/${fam.target}); written ${writtenTotal}, rejected ${rejected.length}`)
   }
   if (accepted.length < fam.target) log(`${fam.name}: stopped at ${accepted.length}/${fam.target} after ${round} rounds (dry=${dry})`)
-  return { name: fam.name, scorer: fam.scorer, accepted: accepted.slice(0, fam.target).map((it, i) => ({ id: `${fam.name}-${i}`, prompt: it.body + SUFFIX, answer: it.answer, scorer: fam.scorer, samples: 1, private: { solution: it.solution, program: it.program || '', topic: it.topic, solver_a: it.a, solver_b: it.b, equivalence_judged: !!it.equivalence_judged } })),
-    overflow: accepted.slice(fam.target).length, rejected: rejected.map(r => ({ body: r.item.body, answer: r.item.answer, reasons: r.reasons, a: r.a, b: r.b })), rounds: round, batches, written: writtenTotal }
+  return { name: fam.name, scorer: fam.scorer, accepted: accepted.slice(0, fam.target).map((it, i) => ({ id: `${fam.name}-${i}`, prompt: it.body + SUFFIX, answer: it.answer, scorer: fam.scorer, samples: 1, private: { solution: it.solution, program: it.program || '', topic: it.topic, solver_a: it.a, solver_b: it.b, solver_flags: it.solver_flags, equivalence_judged: !!it.equivalence_judged } })),
+    overflow: accepted.slice(fam.target).length, rejected: rejected.map(r => ({ body: r.item.body, answer: r.item.answer, reasons: r.reasons, a: r.a, b: r.b, solver_flags: r.solver_flags || r.item.solver_flags })), rounds: round, batches, written: writtenTotal }
 }
 
 const results = (await parallel(args.families.map(fam => () => runFamily(fam)))).filter(Boolean)

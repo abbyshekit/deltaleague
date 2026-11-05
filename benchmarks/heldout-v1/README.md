@@ -8,7 +8,7 @@ Exposure note: an earlier revision of this branch carried the items for about an
 1. Writers (Claude Opus) wrote ten original items per batch for an assigned topic, with a worked solution and, for `gsm_fresh`, a Python `solve()` that computes the answer from the stated quantities.
 2. Two solvers (Claude Sonnet) solved each item blind; the second was told to hunt for ambiguity, a second defensible answer, or a missing quantity.
 3. A critic (Claude Opus) rejected items that are a near-duplicate of a specific item it could name from ARC, GSM8K, MATH, MMLU, GPQA, AQuA, SVAMP, ASDiv, MathQA, AIME/AMC or a well-known textbook, items with more than one defensible answer, and items guessable from surface cues. In the first pass the critic also rejected items for sharing a *template* with public items (seasons, frost wedging, ratio changes); that rule was dropped for the second pass, because the public benchmarks are built from the same templates and a held-out set must exclude memorized items, not topics.
-4. An item was accepted only when the writer and both solvers agreed on the answer (a Sonnet judge decided equivalence when two LaTeX forms differed) and the critic kept it.
+4. An item was accepted only when the writer and both solvers agreed on the answer (a Sonnet judge decided equivalence when two LaTeX forms differed) and the critic kept it. v1 was accepted under the earlier gate, which vetoed on solver B's ambiguity flag and solver A's lack of confidence only. The scripts in this directory apply the stricter gate: an item is rejected when either solver reports `ambiguous: true` or does not report `confident: true`, and each solver's `confident`, `ambiguous` and `issue` values are kept as `solver_flags` in the item's private provenance and in its rejection record.
 5. Deterministic checks then vetoed, with no model in the loop: a `gsm_fresh` program whose result differs from the stated answer; a `math_fresh` or `gsm_fresh` solver answer that `math-verify` (the platform's scorer) does not accept against the stated answer; any 10-word overlap with any item of the public ARC-Challenge test (1,172), GSM8K test (1,319) or MATH-500 (500) sets; duplicate bodies.
 6. `arc_fresh` options were rotated deterministically (item index mod 4) so the correct letter is balanced; the option text is unchanged.
 7. The file is sealed by its SHA-256 (`heldout-v1.sha256`, committed). Solutions, programs and solver answers are in `heldout-v1.private.json`, delivered with the set and never shown to a model under evaluation.
@@ -32,6 +32,21 @@ Hand check: 16 items re-solved by hand across the two passes (nine from pass 1, 
 - Scores on it are advisory until the evaluator adopts it; `delta compare` pairs two local runs on it by its hash.
 
 ## Reproduce
+### Generate a fresh set
+Prerequisites: Node 18+, the Claude Code CLI (`claude`) logged in, Python 3.12 with `math-verify`, and network access for `fetch_public.py`. `run_workflow.mjs` has no npm dependencies.
+
+```
+python fetch_public.py
+node run_workflow.mjs workflow-pass2.js families-pass1.json --out /private/path/pass1.json
+python build_heldout.py --exclude <earlier set, e.g. heldout-v1.json> /private/path/pass1.json /private/path/out
+```
+- `workflow-pass1.js` and `workflow-pass2.js` are written for the Claude Code workflow runtime (globals `agent`, `parallel`, `log`, `args`). `run_workflow.mjs <script> <families.json> --out <result.json>` supplies those globals outside Claude Code: each `agent()` call runs `claude -p` with the schema as `--json-schema` and the prompt on stdin, retries once, and resolves to `null` on a second failure. Options: `--concurrency N` (default 4, applies to agent processes), `--timeout-min M` (default 20; a call that runs longer is killed and counts as a failed attempt), `--model-override MODEL` (replaces every agent's model, for cheap smoke tests), `--dry-run` (offline stub agents, no model calls). Agents run in a temporary directory, so no repository's `CLAUDE.md` is loaded; user-level Claude Code settings still apply. A one-family smoke run (`math_fresh`, target 1, `--model-override haiku`) made 4 calls and cost $0.02.
+- `workflow-pass2.js` holds the current critic rule; use it for new sets. `workflow-pass1.js` keeps the first pass's critic rule (with the template veto) as the record of how that pass ran; both scripts apply the stricter solver gate.
+- `families-pass1.json` is the configuration of v1's first pass: per family the topics, spec, answer and program rules, critic rule, public-benchmark examples, `target` and `batchesPerRound`. `families-pass2.json` is the top-up run (`arc_fresh` 85, `math_fresh` 20, with fresh `arc_fresh` topics). They contain no generated items. For a new set, replace the `topics` lists and set the targets. A family stops at its target, after 8 rounds, or after two consecutive rounds with fewer than two new accepted items.
+- `--exclude` (repeatable) takes an earlier set in `validation.json` format. Its prompts join the 10-word overlap veto and the duplicate check, so a fresh set cannot repeat an exposed one; the counts are recorded in `report.json`.
+- `build_heldout.py` always names its outputs `heldout-v1.json`, `heldout-v1.private.json` and `heldout-v1.sha256`, whatever the set; write a fresh set to its own `<out_dir>` and rename it on delivery. The result JSONs, these outputs and the veto and rejection records contain item text. Keep them outside the repository. `fetch_public.py` writes the public splits to `public/` beside the script; do not commit them.
+
+### Rebuild v1 from its workflow results
 ```
 python fetch_public.py
 python build_heldout.py <workflow results...> <out_dir>
