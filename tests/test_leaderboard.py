@@ -1,4 +1,5 @@
 import json
+import re
 
 from typer.testing import CliRunner
 
@@ -25,20 +26,30 @@ DAY_ONE = [
 ]
 
 
-def test_table_day_one_ties(monkeypatch):
+def cells(line):
+    return re.split(r"\s{2,}", line.strip())
+
+
+def gap_cell(out, name):
+    line = next(l for l in out.splitlines() if name in l)
+    return cells(line)[-1]
+
+
+def test_table_day_one_equal_scores(monkeypatch):
     serve(monkeypatch, DAY_ONE)
     out = runner.invoke(main.app, ARGS + ["--table"]).output
     assert "Original model" in out and "Published weight-space edit reproduction" in out
     assert "33.33 ± 16.67" in out and "original" in out and "ilblackdragon" in out
-    assert "Not separable on the private test: Original model, Published weight-space edit reproduction" in out
-    assert "a difference under 46.20 is noise" in out
+    assert gap_cell(out, "Original model") == "—"
+    assert gap_cell(out, "Published weight-space edit reproduction") == "+0.00 *"
+    assert "independence-based heuristic" in out and "not evidence two rows are equal" in out
 
 
-def test_table_separable(monkeypatch):
+def test_table_outside_band(monkeypatch):
     serve(monkeypatch, [row("a", 50.0, 1.0), row("b", 40.0, 1.0, rank=2)])
     out = runner.invoke(main.app, ARGS + ["--table"]).output
-    assert "All rows are separable on the private test." in out
-    assert "Not separable" not in out
+    assert gap_cell(out, "a  ") == "—" and gap_cell(out, "b  ") == "-10.00"
+    assert out.count("*") == 1
 
 
 def test_table_incomplete_row(monkeypatch):
@@ -46,10 +57,9 @@ def test_table_incomplete_row(monkeypatch):
     serve(monkeypatch, [row("a", 50.0, 1.0), queued])
     result = runner.invoke(main.app, ARGS + ["--table"])
     assert result.exit_code == 0
-    assert "All rows are separable" in result.output
-    assert "Not separable" not in result.output
     line = next(l for l in result.output.splitlines() if "queued one" in l)
-    assert "—" in line and "50.00 ± 1.00" in line
+    assert "50.00 ± 1.00" in line and gap_cell(result.output, "queued one") == "—"
+    assert "heuristic" not in result.output
 
 
 def test_default_output_is_json(monkeypatch):
@@ -58,33 +68,37 @@ def test_default_output_is_json(monkeypatch):
     assert json.loads(result.output) == {"config_id": "runtime-v5", "rows": DAY_ONE}
 
 
-def names(groups):
-    return [[r[0] for r in g] for g in groups]
-
-
-def test_tie_groups_chain(monkeypatch):
-    scored = [("a", 0.0, 1.0), ("b", 2.0, 1.0), ("c", 4.0, 1.0)]
-    assert not main.tied(scored[0], scored[2])
-    assert names(main.tie_groups(scored)) == [["a", "b", "c"]]
+def test_no_definitive_claims_for_chain(monkeypatch):
     serve(monkeypatch, [row("a", 0.0, 1.0), row("b", 2.0, 1.0, rank=2), row("c", 4.0, 1.0, rank=3)])
-    assert "Not separable on the private test: a, b, c" in runner.invoke(main.app, ARGS + ["--table"]).output
+    out = runner.invoke(main.app, ARGS + ["--table"]).output
+    assert gap_cell(out, "c  ") == "—"
+    assert gap_cell(out, "b  ") == "-2.00 *"
+    assert gap_cell(out, "a  ") == "-4.00"
+    assert 4.0 > main.Z * (2 ** 0.5)
+    assert not re.search(r"tie|separable|noise", out, re.I)
+    assert len(out.splitlines()) == 4 + 1 + 2
 
 
-def test_tie_groups_uneven_se(monkeypatch):
-    scored = [("a", 0.0, 10.0), ("b", 1.0, 0.1), ("c", 5.0, 0.1)]
-    assert names(main.tie_groups(scored)) == [["a", "b", "c"]]
+def test_top_row_is_highest_score_not_first(monkeypatch):
     serve(monkeypatch, [row("a", 0.0, 10.0), row("b", 1.0, 0.1, rank=2), row("c", 5.0, 0.1, rank=3)])
     out = runner.invoke(main.app, ARGS + ["--table"]).output
-    assert "Not separable on the private test: a, b, c" in out
-    assert "Private test standard errors from 0.10 to 10.00 points; two rows tie when their gap is within 1.96·√(se_a² + se_b²)." in out
-    assert "up to" not in out
-    assert not main.tied(scored[1], scored[2])
-    assert names(main.tie_groups([scored[1], scored[2]])) == []
+    assert gap_cell(out, "c  ") == "—"
+    assert gap_cell(out, "a  ") == "-5.00 *"
+    assert gap_cell(out, "b  ") == "-4.00"
 
 
-def test_identical_scores_with_zero_se_are_tied(monkeypatch):
-    serve(monkeypatch, [row("a", 100.0, 0.0), row("b", 100.0, 0.0, rank=2)])
-    assert "Not separable" in runner.invoke(main.app, ARGS + ["--table"]).output
+def test_zero_se_band(monkeypatch):
+    serve(monkeypatch, [row("a", 100.0, 0.0), row("b", 99.0, 0.0, rank=2), row("c", 100.0, 0.0, rank=3)])
+    out = runner.invoke(main.app, ARGS + ["--table"]).output
+    assert gap_cell(out, "c  ") == "+0.00 *" and gap_cell(out, "b  ") == "-1.00"
+
+
+def test_top_ignores_unscored_rows(monkeypatch):
+    serve(monkeypatch, [row("big", 99.0, 1.0, state="queued"), row("badse", 98.0, float("nan"), rank=2),
+                        row("a", 50.0, 1.0, rank=3), row("b", 49.0, 1.0, rank=4)])
+    out = runner.invoke(main.app, ARGS + ["--table"]).output
+    assert gap_cell(out, "big") == "—" and gap_cell(out, "badse") == "—"
+    assert gap_cell(out, "a  ") == "—" and gap_cell(out, "b  ") == "-1.00 *"
 
 
 def test_null_username_and_parent_rows(monkeypatch):
@@ -96,24 +110,12 @@ def test_null_username_and_parent_rows(monkeypatch):
     assert "original" in lines["orig"] and "—" in lines["anon"] and "original" not in lines["anon"]
 
 
-def test_tie_groups_bridge_and_order():
-    bridged = [("a", 0.0, 1.0), ("b", 10.0, 1.0), ("c", 20.0, 1.0), ("d", 30.0, 1.0), ("e", 5.0, 3.0)]
-    assert not main.tied(bridged[0], bridged[1])
-    assert main.tied(bridged[4], bridged[0]) and main.tied(bridged[4], bridged[1])
-    assert main.tied(bridged[1], bridged[2]) is False
-    assert names(main.tie_groups(bridged[:2] + [bridged[4]])) == [["a", "b", "e"]]
-    five = [("a", 0.0, 1.0), ("b", 4.0, 1.0), ("c", 8.0, 1.0), ("d", 12.0, 1.0), ("e", 6.0, 5.0)]
-    assert names(main.tie_groups(five)) == [["a", "b", "c", "d", "e"]]
-    disjoint = [("a", 0.0, 1.0), ("b", 100.0, 1.0), ("c", 101.0, 1.0), ("d", 1.0, 1.0)]
-    assert names(main.tie_groups(disjoint)) == [["a", "d"], ["b", "c"]]
-
-
 def test_empty_board(monkeypatch):
     serve(monkeypatch, [])
     result = runner.invoke(main.app, ARGS + ["--table"])
     assert result.exit_code == 0
     lines = result.output.splitlines()
-    assert lines[0].split() == ["rank", "name", "submitter", "validation", "test", "±", "se"]
+    assert lines[0].split() == ["rank", "name", "submitter", "validation", "test", "±", "se", "gap", "to", "top"]
     assert "No standard errors reported." in result.output
 
 
@@ -125,9 +127,9 @@ def test_bad_numbers_are_unscored(monkeypatch):
     out = result.output
     lines = {l.split()[1]: l for l in out.splitlines()[1:5]}
     assert all(v not in l.lower().replace(k, "") for k, l in lines.items() for v in ("nan", "inf", "-1"))
-    assert "Not separable" not in out and "All rows are separable" in out
-    assert lines["nan"].rstrip().endswith("50.00") and lines["neg"].rstrip().endswith("50.00")
-    assert lines["inf"].rstrip().endswith("— ± 1.00")
+    assert "separable" not in out and gap_cell(out, "ok  ") == "—"
+    assert cells(lines["nan"])[-2] == "50.00" and cells(lines["neg"])[-2] == "50.00"
+    assert cells(lines["inf"])[-2] == "— ± 1.00"
 
 
 def test_name_and_rank_fallbacks(monkeypatch):
@@ -140,8 +142,11 @@ def test_name_and_rank_fallbacks(monkeypatch):
 
 def test_table_needs_model():
     result = runner.invoke(main.app, ["leaderboard", "--table"])
-    assert result.exit_code != 0
-    assert "--table needs --model: tie groups are per competition." in result.output
+    assert result.exit_code == 2
+    text = re.sub(r"\x1b\[[0-9;?]*[ -/]*[@-~]", "", result.output)
+    text = re.sub(r"[\u2500-\u257f]", "", text)
+    flat = re.sub(r"\s+", "", text)
+    assert re.sub(r"\s+", "", "--table needs --model: rows are compared within one competition.") in flat
 
 
 def test_table_sanitises_names(monkeypatch):
