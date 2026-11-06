@@ -56,6 +56,65 @@ def test_thinking_and_choice_scoring():
     assert local.score_answer({'answer': '4', 'scorer': 'math'}, r'\boxed{4}') == 1
 
 
+def test_ifeval_scorer_and_unknown_scorer():
+    import sys
+    import types
+
+    class Instruction:
+        def __init__(self, instruction_id):
+            self.instruction_id = instruction_id
+        def build_description(self, **kwargs):
+            self.prompt = kwargs.get('prompt')
+        def get_instruction_args(self):
+            return {'prompt': None} if self.instruction_id == 'prompted' else None
+        def check_following(self, answer):
+            return answer == 'yes'
+
+    registry = types.ModuleType('lm_eval.tasks.ifeval.instructions_registry')
+    registry.INSTRUCTION_DICT = {'plain': Instruction, 'prompted': Instruction}
+    for name in ('lm_eval', 'lm_eval.tasks', 'lm_eval.tasks.ifeval'):
+        sys.modules.setdefault(name, types.ModuleType(name))
+    sys.modules['lm_eval.tasks.ifeval.instructions_registry'] = registry
+    plain = {'scorer': 'ifeval', 'prompt': 'Say yes', 'instruction_id_list': ['plain'], 'kwargs': [{}]}
+    assert local.score_answer(plain, 'yes') == 1
+    assert local.score_answer(plain, 'no') == 0
+    prompted = {'scorer': 'ifeval', 'prompt': 'Say yes', 'instruction_id_list': ['prompted'], 'kwargs': [{}]}
+    assert local.score_answer(prompted, 'yes') == 1
+    with pytest.raises(ValueError, match='unknown_scorer'):
+        local.score_answer({'scorer': 'bleu', 'answer': 'x'}, 'x')
+
+
+def test_generate_rejects_an_over_budget_prompt_and_marks_truncation():
+    class Batch(dict):
+        def to(self, device):
+            return self
+
+    class Tokenizer:
+        eos_token = None
+        pad_token = None
+        def apply_chat_template(self, *args, **kwargs):
+            return 'prompt'
+        def __call__(self, text, return_tensors, add_special_tokens):
+            return Batch(input_ids=torch.ones(1, 100, dtype=torch.long))
+        def decode(self, tokens, skip_special_tokens=False):
+            return 'answer'
+
+    class Model:
+        def generate(self, **kwargs):
+            count = kwargs['max_new_tokens']
+            return torch.zeros(1, 100 + count, dtype=torch.long)
+
+    runner = local.Runner.__new__(local.Runner)
+    runner.tokenizer = Tokenizer()
+    runner.model = Model()
+    runner.torch = torch
+    runner.device = 'cpu'
+    with pytest.raises(ValueError, match='max_model_len'):
+        runner.generate('hi', {'max_tokens': 20, 'max_model_len': 110, 'temperature': 0}, 1)
+    result = runner.generate('hi', {'max_tokens': 4, 'max_model_len': 200, 'temperature': 0, 'enable_thinking': False}, 1)
+    assert result['truncated'] is True and result['tokens'] == 4 and result['text'] == 'answer'
+
+
 def test_device_selection_and_unavailable_device():
     fake = SimpleNamespace(cuda=SimpleNamespace(is_available=lambda: False), backends=SimpleNamespace(mps=SimpleNamespace(is_available=lambda: True)))
     assert local.select_device(fake, 'auto') == 'mps'
