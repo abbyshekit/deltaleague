@@ -89,6 +89,92 @@ def test_cli_evaluation_report_and_existing_output_protection(workspace, monkeyp
     assert output.read_bytes() == original
 
 
+def test_weights_overlay_links_checkpoint_and_rejects_invalid_input(workspace):
+    root, metadata, _ = workspace
+    weights = root / 'candidate.safetensors'
+    save_file({'layer.weight': torch.tensor([3., 4.])}, str(weights))
+    with local.model_directory(root, metadata, weights=weights) as (directory, identity):
+        link = directory / 'model.safetensors'
+        assert identity['kind'] == 'weights' and link.is_symlink()
+        assert file_hash(link) == file_hash(weights)
+        assert (directory / 'config.json').is_symlink()
+    with pytest.raises(ValueError, match='either'):
+        with local.model_directory(root, metadata, weights=weights, patch=root / 'patch'):
+            pass
+    binary = root / 'weights.bin'
+    binary.write_bytes(b'nope')
+    with pytest.raises(ValueError, match='safetensors'):
+        with local.model_directory(root, metadata, weights=binary):
+            pass
+    config = root / 'model' / 'config.json'
+    original = config.read_text()
+    config.write_text('mutated')
+    try:
+        with pytest.raises(ValueError, match='config.json'):
+            with local.model_directory(root, metadata):
+                pass
+    finally:
+        config.write_text(original)
+
+
+def test_read_workspace_rejects_mismatched_config_model_and_parent(workspace):
+    root, _, _ = workspace
+    local.read_workspace(root)
+    edits = [
+        (root / 'delta-workspace.json', 'model_id', 'other'),
+        (root / 'delta-workspace.json', 'config_id', 'other'),
+        (root / 'delta-workspace.json', 'parent_version_id', '00000000-0000-0000-0000-000000000099'),
+        (root / 'evaluation.json', 'model_id', 'other'),
+        (root / 'model' / 'delta-model.json', 'model_id', 'other'),
+    ]
+    for path, key, value in edits:
+        saved = path.read_text()
+        data = json.loads(saved)
+        data[key] = value
+        path.write_text(json.dumps(data))
+        try:
+            with pytest.raises(ValueError, match='mismatch'):
+                local.read_workspace(root)
+        finally:
+            path.write_text(saved)
+
+
+def rehash(root, config, data):
+    path = root / 'validation.json'
+    path.write_text(json.dumps(data))
+    updated = dict(config)
+    updated['validation_sha256'] = file_hash(path)
+    return updated
+
+
+def test_public_examples_rejects_unknown_benchmark_empty_and_invalid_samples(workspace):
+    root, _, config = workspace
+    with pytest.raises(ValueError, match='Unknown benchmark'):
+        local.public_examples(root, config, benchmark='missing')
+    data = json.loads((root / 'validation.json').read_text())
+    empty = rehash(root, config, {**data, 'a': []})
+    with pytest.raises(ValueError, match='Empty benchmark'):
+        local.public_examples(root, empty)
+    bad_scorer = json.loads(json.dumps(data))
+    bad_scorer['a'][0]['scorer'] = 'bleu'
+    with pytest.raises(ValueError, match='Unsupported scorer'):
+        local.public_examples(root, rehash(root, config, bad_scorer))
+    for samples in (0, 17, '2'):
+        counted = json.loads(json.dumps(data))
+        counted['a'][0]['samples'] = samples
+        with pytest.raises(ValueError, match='Invalid sample count'):
+            local.public_examples(root, rehash(root, config, counted))
+    with pytest.raises(ValueError, match='object of benchmarks'):
+        local.public_examples(root, rehash(root, config, []))
+    nested = {**data, 'a': {'prompt': 'A'}}
+    with pytest.raises(ValueError, match='Invalid benchmark'):
+        local.public_examples(root, rehash(root, config, nested))
+    row = json.loads(json.dumps(data))
+    row['a'] = ['yes']
+    with pytest.raises(ValueError, match='Invalid example'):
+        local.public_examples(root, rehash(root, config, row))
+
+
 def test_leaderboard_version_model_mismatch_is_rejected(workspace, monkeypatch):
     root, _, _ = workspace
     monkeypatch.setattr(main, 'call', lambda *a, **kw: {'model_id': 'other'})
