@@ -9,13 +9,10 @@ Private fields the workflow attaches to an item (solutions, programs, solver ans
 import argparse
 import hashlib
 import json
-import ast
 import re
-import resource
-import subprocess
-import sys
-import tempfile
 from pathlib import Path
+
+from program_check import run_program
 
 from math_verify import parse, verify
 from math_verify.parser import ExprExtractionConfig, LatexExtractionConfig
@@ -67,62 +64,6 @@ def mv_equal(gold, pred):
     return bool(g) and bool(p) and verify(g, p)
 
 
-BAD_CALLS = {'open', 'exec', 'eval', '__import__', 'compile', 'input', 'breakpoint'}
-BAD_BASES = {'os', 'sys', 'subprocess', 'socket', 'builtins'}
-LIMITS = ((resource.RLIMIT_AS, 512 * 2**20), (resource.RLIMIT_CPU, 5), (resource.RLIMIT_FSIZE, 2**20), (resource.RLIMIT_NOFILE, 16))
-
-
-def veto_program(program):
-    try:
-        tree = ast.parse(program)
-    except SyntaxError as e:
-        return f'program syntax error: {e.msg}'
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import) and any(a.name != 'math' for a in node.names):
-            return 'program imports ' + ', '.join(a.name for a in node.names)
-        if isinstance(node, ast.ImportFrom) and (node.module != 'math' or node.level):
-            return 'program imports ' + '.' * node.level + (node.module or '')
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in BAD_CALLS:
-            return f'program calls {node.func.id}'
-        if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) and node.value.id in BAD_BASES:
-            return f'program uses {node.value.id}.{node.attr}'
-    return None
-
-
-def limit_child():
-    for res, val in LIMITS:
-        try:
-            resource.setrlimit(res, (val, val))
-        except (ValueError, OSError):
-            pass
-
-
-def run_program(program, numeric_answer):
-    if not program.strip():
-        return 'no program'
-    if (veto := veto_program(program)):
-        return veto
-    code = program + '\n\nimport json\nprint(json.dumps(solve()))\n'
-    with tempfile.NamedTemporaryFile('w', suffix='.py', delete=False, encoding='utf-8') as f:
-        f.write(code); path = f.name
-    try:
-        with tempfile.TemporaryDirectory() as cwd, open(Path(cwd) / 'out.txt', 'wb+') as so, open(Path(cwd) / 'err.txt', 'wb+') as se:
-            try:
-                r = subprocess.run([sys.executable, '-I', path], stdout=so, stderr=se, timeout=10, cwd=cwd,
-                                   env={'PATH': '/usr/bin:/bin'}, preexec_fn=limit_child)
-            except subprocess.TimeoutExpired:
-                return 'program timeout'
-            so.seek(0); se.seek(0)
-            out, err = so.read(4096).decode('utf-8', 'replace').strip(), se.read(4096).decode('utf-8', 'replace').strip()
-    finally:
-        Path(path).unlink(missing_ok=True)
-    if r.returncode != 0:
-        return 'program error: ' + err.splitlines()[-1][:120] if err else 'program error'
-    try:
-        value = float(json.loads(out))
-    except Exception:
-        return 'program output not numeric: ' + out[:60]
-    return None if abs(value - numeric_answer) < 1e-6 else f'program returns {value}, item says {numeric_answer}'
 
 
 sealed, private, report = {}, {}, {'families': {}}

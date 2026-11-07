@@ -55,4 +55,30 @@ python build_heldout.py <workflow results...> <out_dir>
 
 The committed set was built from runs `wf_616c5f47-fbe` (pass 1) and `wf_7a2c8833-e67` (pass 2). Their result JSONs, and the per-item rejection log, are delivered with the set rather than committed, because they contain item text.
 
-The build executes model-written Python (the `gsm_fresh` `solve()` programs). Each program is first parsed with `ast` and vetoed if it imports anything but `math`, calls `open`, `exec`, `eval`, `__import__`, `compile`, `input` or `breakpoint`, or touches an attribute of `os`, `sys`, `subprocess`, `socket` or `builtins`. It then runs under `python -I` in an empty temporary directory with `PATH=/usr/bin:/bin` as the only environment variable, a 10 s timeout, and `setrlimit` caps of 512 MB address space, 5 s CPU, 1 MB written file size and 16 open files; captured output is truncated to 4 KB. macOS refuses `RLIMIT_AS`; the build skips any limit the OS rejects. This is a screen and resource limit, not an isolation boundary: run the build in a disposable environment if the workflow output is not yours.
+The build executes model-written Python (the `gsm_fresh` `solve()` programs) only
+inside the same pinned CPython/WASI sandbox used for public coding benchmarks.
+The AST screen remains a format policy, not the isolation boundary. WASI exposes
+only its read-only standard library, with no host files, host environment or
+network, and bounds memory, fuel, elapsed time and output. The numeric answer
+check runs inside that sandbox. Missing dependencies, a missing runtime or a
+failed preflight stop the build; there is no host-Python fallback.
+
+Install the current repository package and pinned Wasmtime in a separate Python
+3.12 environment before running the build. Run these setup commands from the
+repository root:
+
+```sh
+python3.12 -m venv .venv-heldout
+.venv-heldout/bin/pip install . math-verify==0.9.0 wasmtime==50.0.1 pytest
+.venv-heldout/bin/python -m delta_cli.public_eval.install_wasi "$PWD/.wasi-heldout"
+export DELTA_WASI_ROOT="$PWD/.wasi-heldout"
+```
+
+Use `.venv-heldout/bin/python` for `build_heldout.py`. The runtime installer checks
+the archive SHA-256. Program errors and wrong answers veto individual items;
+sandbox infrastructure failures abort the build. The ordinary tests cover that
+fail-closed behavior. With the runtime installed, also run:
+
+```sh
+DELTA_TEST_HELDOUT_WASI=1 .venv-heldout/bin/python -m pytest -q tests/test_heldout_programs.py
+```
