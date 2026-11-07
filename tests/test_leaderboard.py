@@ -93,12 +93,12 @@ def test_zero_se_band(monkeypatch):
     assert gap_cell(out, "c  ") == "+0.00 *" and gap_cell(out, "b  ") == "-1.00"
 
 
-def test_top_ignores_unscored_rows(monkeypatch):
+def test_top_ignores_incomplete_rows_but_not_missing_uncertainty(monkeypatch):
     serve(monkeypatch, [row("big", 99.0, 1.0, state="queued"), row("badse", 98.0, float("nan"), rank=2),
                         row("a", 50.0, 1.0, rank=3), row("b", 49.0, 1.0, rank=4)])
     out = runner.invoke(main.app, ARGS + ["--table"]).output
     assert gap_cell(out, "big") == "—" and gap_cell(out, "badse") == "—"
-    assert gap_cell(out, "a  ") == "—" and gap_cell(out, "b  ") == "-1.00 *"
+    assert gap_cell(out, "a  ") == "-48.00" and gap_cell(out, "b  ") == "-49.00"
 
 
 def test_null_username_and_parent_rows(monkeypatch):
@@ -127,7 +127,7 @@ def test_bad_numbers_are_unscored(monkeypatch):
     out = result.output
     lines = {l.split()[1]: l for l in out.splitlines()[1:5]}
     assert all(v not in l.lower().replace(k, "") for k, l in lines.items() for v in ("nan", "inf", "-1"))
-    assert "separable" not in out and gap_cell(out, "ok  ") == "—"
+    assert "separable" not in out and gap_cell(out, "ok  ") == "+0.00"
     assert cells(lines["nan"])[-2] == "50.00" and cells(lines["neg"])[-2] == "50.00"
     assert cells(lines["inf"])[-2] == "— ± 1.00"
 
@@ -160,3 +160,27 @@ def test_table_sanitises_names(monkeypatch):
     serve(monkeypatch, [row("n", 50.0, 1.0, submitter={"username": "x" * 60})])
     out = runner.invoke(main.app, ARGS + ["--table"]).output
     assert "x" * 24 in out and "x" * 25 not in out
+
+
+def test_top_without_standard_error_still_defines_all_gaps(monkeypatch):
+    serve(monkeypatch, [row("leader", 90.0, None), row("second", 80.0, 1.0, rank=2),
+                        row("third", 70.0, 1.0, rank=3)])
+    out = runner.invoke(main.app, ARGS + ["--table"]).output
+    assert gap_cell(out, "leader") == "—"
+    assert gap_cell(out, "second") == "-10.00"
+    assert gap_cell(out, "third") == "-20.00"
+
+
+def test_gaps_available_when_all_standard_errors_missing(monkeypatch):
+    serve(monkeypatch, [row("leader", 90.0, None), row("second", 80.0, None, rank=2)])
+    out = runner.invoke(main.app, ARGS + ["--table"]).output
+    assert gap_cell(out, "second") == "-10.00"
+    assert "No standard errors reported." in out
+
+
+def test_missing_row_uncertainty_does_not_hide_its_gap(monkeypatch):
+    serve(monkeypatch, [row("leader", 90.0, 1.0), row("second", 89.0, None, rank=2),
+                        row("third", 89.0, 1.0, rank=3)])
+    out = runner.invoke(main.app, ARGS + ["--table"]).output
+    assert gap_cell(out, "second") == "-1.00"
+    assert gap_cell(out, "third") == "-1.00 *"
