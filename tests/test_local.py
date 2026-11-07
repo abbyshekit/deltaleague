@@ -107,7 +107,7 @@ def test_thinking_and_choice_scoring():
     assert local.score_answer({'answer': '4', 'scorer': 'math'}, r'\boxed{4}') == 1
 
 
-def test_ifeval_scorer_and_unknown_scorer():
+def test_ifeval_scorer_and_unknown_scorer(monkeypatch):
     import sys
     import types
 
@@ -124,8 +124,9 @@ def test_ifeval_scorer_and_unknown_scorer():
     registry = types.ModuleType('lm_eval.tasks.ifeval.instructions_registry')
     registry.INSTRUCTION_DICT = {'plain': Instruction, 'prompted': Instruction}
     for name in ('lm_eval', 'lm_eval.tasks', 'lm_eval.tasks.ifeval'):
-        sys.modules.setdefault(name, types.ModuleType(name))
-    sys.modules['lm_eval.tasks.ifeval.instructions_registry'] = registry
+        if name not in sys.modules:
+            monkeypatch.setitem(sys.modules, name, types.ModuleType(name))
+    monkeypatch.setitem(sys.modules, 'lm_eval.tasks.ifeval.instructions_registry', registry)
     plain = {'scorer': 'ifeval', 'prompt': 'Say yes', 'instruction_id_list': ['plain'], 'kwargs': [{}]}
     assert local.score_answer(plain, 'yes') == 1
     assert local.score_answer(plain, 'no') == 0
