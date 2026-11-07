@@ -8,7 +8,7 @@ import statistics
 import tempfile
 import time
 
-from .artifacts import file_hash, reconstruct, validate_manifest
+from .artifacts import file_hash, reconstruct, validate_manifest, verify_artifact_bytes
 from .scoring import score_answer
 
 
@@ -29,17 +29,14 @@ def model_directory(workspace, metadata, weights=None, patch=None, parent=None):
     if weights and patch:
         raise ValueError('Choose either --weights or --patch.')
     parent = parent or workspace / 'model'
-    for artifact in metadata['files']:
-        name = artifact['name']
-        if Path(name).name != name:
-            raise ValueError('Invalid model artifact filename.')
-        if name == 'model.safetensors' and weights:
-            continue
-        path = parent / name
-        if path.stat().st_size != artifact['size_bytes'] or file_hash(path) != artifact['sha256']:
-            raise ValueError(f'Parent artifact changed: {name}. Keep the parent untouched and use --weights or --patch.')
+    files = metadata['files']
+    if weights:
+        files = [artifact for artifact in files if not (isinstance(artifact, dict) and artifact.get('name') == 'model.safetensors')]
+    digests = verify_artifact_bytes(parent, files)
     if not weights and not patch:
-        yield parent, {'kind': 'parent', 'weights_sha256': file_hash(parent / 'model.safetensors')}
+        if 'model.safetensors' not in digests:
+            raise ValueError('Parent artifact changed: model.safetensors. Keep the parent untouched.')
+        yield parent, {'kind': 'parent', 'weights_sha256': digests['model.safetensors']}
         return
     with tempfile.TemporaryDirectory(prefix='delta-local-') as temp:
         target = Path(temp)
@@ -173,21 +170,38 @@ def public_examples(workspace, config, benchmark=None, limit=None):
     return rows, selected, not benchmark and all(limit is None or limit >= len(v) for v in data.values())
 
 
+def generations_path(report):
+    """Path of the generations file written beside an evaluation report."""
+    return Path(report).with_suffix('.generations.jsonl')
+
+
+def example_means(rows):
+    """Per benchmark: mean sample score by example, truncation rate and mean output tokens."""
+    grouped = {}
+    for row in rows:
+        group = grouped.setdefault(row['benchmark'], {'scores': {}, 'truncated': [], 'tokens': []})
+        group['scores'].setdefault(row['example_index'], []).append(row['score'])
+        group['truncated'].append(bool(row['truncated']))
+        group['tokens'].append(row['tokens'])
+    return {name: {'examples': {k: statistics.mean(v) for k, v in g['scores'].items()},
+                   'truncation_rate': statistics.mean(g['truncated']), 'mean_tokens': statistics.mean(g['tokens'])}
+            for name, g in grouped.items()}
+
+
 def evaluate(runner, tasks, generation, stream, progress):
-    scores, tokens, seconds, truncated = {}, 0, 0, 0
+    rows, tokens, seconds, truncated = [], 0, 0, 0
     for index, task in enumerate(tasks, 1):
         result = runner.generate(task['example']['prompt'], generation, task['seed'])
         score = score_answer(task['example'], result['text'])
-        scores.setdefault(task['benchmark'], {}).setdefault(task['example_index'], []).append(score)
         row = {k: v for k, v in task.items() if k != 'example'}
         row.update(example_id=task['example']['id'], score=score, **result)
+        rows.append({k: row[k] for k in ('benchmark', 'example_index', 'example_id', 'score', 'truncated', 'tokens')})
         stream.write(json.dumps(row) + '\n')
         stream.flush()
         tokens += result['tokens']
         seconds += result['generation_seconds']
         truncated += result['truncated']
         progress(index, len(tasks), task['benchmark'])
-    components = {name: statistics.mean(statistics.mean(samples) for samples in examples.values()) * 100
-                  for name, examples in scores.items()}
+    components = {name: statistics.mean(v['examples'].values()) * 100 for name, v in example_means(rows).items()}
     return {'validation_score': statistics.mean(components.values()), 'validation_benchmarks': components,
             'output_tokens': tokens, 'generation_seconds': seconds, 'truncation_rate': truncated / len(tasks)}
