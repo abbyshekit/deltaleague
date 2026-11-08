@@ -1,14 +1,22 @@
+import hashlib
 import json
+import math
 import os
+import re
+import shutil
 import sys
+import tempfile
 from pathlib import Path
 import time
+from urllib.parse import urlsplit
 import uuid
 import webbrowser
 import httpx
 import typer
 from .local_commands import run, evaluate
-from .artifacts import build_sparse, validate_manifest, file_hash
+from .public_eval.cli import app as public_eval_app
+from .compare import compare
+from .artifacts import build_sparse, validate_manifest, file_hash, verify_artifact_bytes
 
 app = typer.Typer(help="Delta League: submit a patch, prove an improvement.", no_args_is_help=True)
 models_app = typer.Typer()
@@ -21,7 +29,9 @@ app.add_typer(model_app, name="model")
 app.add_typer(patch_app, name="patch")
 app.add_typer(submission_app, name="submission")
 app.add_typer(competition_app, name="competition")
+app.add_typer(public_eval_app, name="public-eval")
 API = "https://deltaleague.ai"
+POLL_RETRIES = 5
 
 
 def config_path():
@@ -30,7 +40,10 @@ def config_path():
 
 def credentials():
     p = config_path()
-    return json.loads(p.read_text()) if p.exists() else {}
+    saved = json.loads(p.read_text()) if p.exists() else {}
+    if not isinstance(saved, dict):
+        raise ValueError("Invalid credential configuration; run delta login again.")
+    return saved
 
 
 def client():
@@ -39,10 +52,29 @@ def client():
     return httpx.Client(base_url=API, headers={"Authorization": f"Bearer {token}"} if token else {}, timeout=60)
 
 
-def call(method, path, **kwargs):
+def retryable(response):
+    return response.status_code == 429 or response.status_code >= 500
+
+
+def request(method, path, retries=0, **kwargs):
+    """One attempt, or a bounded retry of transport errors, 429s and 5xx responses."""
+    bound = max(retries, 0)
+    with client() as http:
+        for attempt in range(bound + 1):
+            try:
+                response = http.request(method, "/api/v1/" + path, **kwargs)
+            except httpx.HTTPError:
+                if attempt == bound:
+                    raise
+            else:
+                if attempt == bound or not retryable(response):
+                    return response
+            time.sleep(2)
+
+
+def call(method, path, retries=0, **kwargs):
     try:
-        with client() as c:
-            r = c.request(method, "/api/v1/" + path, **kwargs)
+        r = request(method, path, retries, **kwargs)
     except httpx.HTTPError:
         typer.echo("Could not reach the Delta League API. Check the connection and --api URL, then retry.", err=True)
         raise typer.Exit(1)
@@ -63,12 +95,43 @@ def show(value):
     typer.echo(json.dumps(value, indent=2))
 
 
+def api_origin(raw):
+    """Return scheme://host[:port]. Reject userinfo, a path, and cleartext except loopback."""
+    try:
+        parsed = urlsplit(raw.strip())
+        port = parsed.port
+    except ValueError:
+        raise typer.BadParameter("Use HTTPS outside localhost") from None
+    loopback = parsed.scheme == "http" and parsed.hostname in {"127.0.0.1", "localhost"} and port is not None
+    if (parsed.username or parsed.password or parsed.query or parsed.fragment or parsed.path not in {"", "/"}
+            or parsed.hostname is None or (parsed.scheme != "https" and not loopback)):
+        raise typer.BadParameter("Use HTTPS outside localhost")
+    host = f"[{parsed.hostname}]" if ":" in parsed.hostname else parsed.hostname
+    return f"{parsed.scheme}://{host}" if port is None else f"{parsed.scheme}://{host}:{port}"
+
+
+def public_validation(config):
+    names = config.get("validation_names")
+    size = config.get("validation_size_bytes")
+    url, digest = config.get("validation_download"), config.get("validation_sha256")
+    if (not isinstance(url, str) or not url or not isinstance(digest, str) or not digest or type(size) is not int or size <= 0
+            or not isinstance(names, list) or not names or not all(isinstance(name, str) and name for name in names)):
+        raise typer.BadParameter("The server does not provide a verifiable public validation download for this configuration yet.")
+    try:
+        parsed = urlsplit(url)
+        valid_url = parsed.scheme in {"http", "https"} and parsed.hostname and not parsed.username and not parsed.password
+        parsed.port
+    except ValueError:
+        valid_url = False
+    if not valid_url or not re.fullmatch(r"[0-9a-f]{64}", digest):
+        raise typer.BadParameter("Invalid public validation download URL or SHA-256 digest.")
+    return {"name": "validation.json", "url": url, "sha256": digest, "size_bytes": size}, names
+
+
 @app.callback()
 def options(api: str = typer.Option(os.getenv("DELTA_API", "https://deltaleague.ai"), help="Delta League API origin")):
     global API
-    API = api.rstrip("/")
-    if not API.startswith("https://") and not API.startswith(("http://127.0.0.1:", "http://localhost:")):
-        raise typer.BadParameter("Use HTTPS outside localhost")
+    API = api_origin(api)
 
 
 @app.command()
@@ -82,7 +145,11 @@ def login(no_browser: bool = typer.Option(False, "--no-browser", help="Print the
         webbrowser.open(data["verification_url"])
     for _ in range(120):
         time.sleep(data["interval"])
-        result = call("POST", f"cli-auth/{data['id']}", json={"secret": data["secret"]})
+        try:
+            result = call("POST", f"cli-auth/{data['id']}", json={"secret": data["secret"]}, retries=POLL_RETRIES)
+        except typer.Exit:
+            typer.echo("Sign-in did not finish. Authorization may have expired or been consumed. Run `delta login` again.", err=True)
+            raise
         if "token" in result:
             path = config_path()
             path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -92,14 +159,30 @@ def login(no_browser: bool = typer.Option(False, "--no-browser", help="Print the
                 json.dump({"api": API, "token": result["token"]}, f)
             typer.echo("Signed in.")
             return
+    typer.echo("Sign-in timed out. Run `delta login` again.", err=True)
     raise typer.Exit(1)
 
 
 @app.command()
 def logout():
-    call("POST", "logout")
-    config_path().unlink(missing_ok=True)
-    typer.echo("Signed out.")
+    path = config_path()
+    revoked = False
+    try:
+        with client() as http:
+            response = http.post("/api/v1/logout")
+        # 401 means the token is already invalid, so the local delete finishes the sign-out.
+        revoked = response.is_success or response.status_code == 401
+    except (httpx.HTTPError, OSError, ValueError):
+        revoked = False
+    try:
+        path.unlink(missing_ok=True)
+    except OSError:
+        typer.echo("Could not remove the local credential file.", err=True)
+        raise typer.Exit(1)
+    if revoked:
+        typer.echo("Signed out.")
+    else:
+        typer.echo("Removed local credentials. The server session could not be revoked.", err=True)
 
 
 @app.command()
@@ -198,8 +281,7 @@ def competition_init(model: str, output: Path = typer.Option(Path("experiment"))
     if version["model_id"] != model:
         raise typer.BadParameter("The selected parent belongs to a different model.")
     config = call("GET", f"evaluation-configs/{board['config_id']}")
-    if not config.get("validation_download") or not config.get("validation_sha256"):
-        raise typer.BadParameter("The server does not provide a verifiable public validation download for this configuration yet.")
+    validation, names = public_validation(config)
     identity = {"api": API, "model_id": model, "parent_version_id": parent, "config_id": config["id"]}
     workspace_path = output / "delta-workspace.json"
     if workspace_path.exists():
@@ -207,20 +289,62 @@ def competition_init(model: str, output: Path = typer.Option(Path("experiment"))
         if any(previous.get(k) != value for k, value in identity.items()):
             raise typer.BadParameter("This workspace belongs to another model, parent, API, or evaluation version. Use a new output directory.")
     pull_model(parent, output / "model")
-    download_artifact({"name": "validation.json", "url": config["validation_download"],
-                       "sha256": config["validation_sha256"], "size_bytes": config["validation_size_bytes"]}, output)
+    download_artifact(validation, output)
     public_config = {k: v for k, v in config.items() if k != "validation_download"}
     (output / "evaluation.json").write_text(json.dumps(public_config, indent=2))
     workspace_path.write_text(json.dumps(identity, indent=2))
     show({**identity, "directory": str(output), "parent_directory": str(output / "model"),
-          "validation_file": str(output / "validation.json"), "validation_benchmarks": config["validation_names"]})
+          "validation_file": str(output / "validation.json"), "validation_benchmarks": names})
+
+
+def publish_directory(staging: Path, output: Path):
+    """Replace output with staging only after the new directory is complete."""
+    if not output.exists():
+        staging.rename(output)
+        return
+    # Keep the old output in a directory owned by this invocation only.
+    backup = Path(tempfile.mkdtemp(prefix=f".{output.name}.backup-", dir=output.parent))
+    displaced = backup / "previous"
+    try:
+        output.rename(displaced)
+        try:
+            staging.rename(output)
+        except OSError:
+            displaced.rename(output)
+            raise
+    finally:
+        # If rollback itself failed, retain the backup for manual recovery.
+        if not displaced.exists():
+            backup.rmdir()
+    shutil.rmtree(backup)
 
 
 @patch_app.command("build")
-def patch_build(parent: Path = typer.Option(...), modified: Path = typer.Option(...), output: Path = typer.Option(Path("submission"))):
+def patch_build(parent: Path = typer.Option(...), modified: Path = typer.Option(...), output: Path = typer.Option(Path("submission")),
+                force: bool = typer.Option(False, "--force", help="Replace an existing output directory.")):
     """Build an exact sparse replacement patch. Parent is a `delta model pull` directory."""
-    metadata = json.loads((parent / "delta-model.json").read_text())
-    manifest = build_sparse(parent / "model.safetensors", modified, output, metadata["id"], metadata["content_hash"], metadata["model_id"])
+    staging = None
+    try:
+        if output.exists() and any(output.iterdir()) and not force:
+            raise typer.BadParameter(f"{output} already exists. Choose a new directory or pass --force.")
+        metadata = json.loads((parent / "delta-model.json").read_text())
+        if not isinstance(metadata, dict) or any(key not in metadata for key in ("id", "content_hash", "model_id", "files")):
+            raise ValueError("invalid parent metadata")
+        verified = verify_artifact_bytes(parent, metadata["files"])
+        if "model.safetensors" not in verified:
+            raise ValueError("Parent inventory must verify model.safetensors.")
+        output.parent.mkdir(parents=True, exist_ok=True)
+        staging = Path(tempfile.mkdtemp(prefix=f".{output.name}.", dir=output.parent))
+        manifest = build_sparse(parent / "model.safetensors", modified, staging, metadata["id"], metadata["content_hash"], metadata["model_id"])
+        publish_directory(staging, output)
+        staging = None
+    except typer.BadParameter:
+        raise
+    except (OSError, ValueError) as exc:
+        raise typer.BadParameter(str(exc)) from None
+    finally:
+        if staging and staging.exists():
+            shutil.rmtree(staging, ignore_errors=True)
     typer.echo(f"Built {len(manifest['tensors'])} modified tensors in {output}")
 
 
@@ -231,12 +355,91 @@ def inspect(path: Path):
 
 @app.command()
 def validate(path: Path):
-    manifest = json.loads((path / "manifest.json").read_text())
-    validate_manifest(manifest)
-    for f in manifest["artifacts"]:
-        if file_hash(path / f["name"]) != f["sha256"] or (path / f["name"]).stat().st_size != f["size_bytes"]:
-            raise typer.BadParameter("Artifact integrity failure")
+    manifest_path = path / "manifest.json"
+    try:
+        manifest = json.loads(manifest_path.read_text())
+        validate_manifest(manifest)
+        for artifact in manifest["artifacts"]:
+            name = artifact["name"]
+            if not isinstance(name, str) or Path(name).name != name:
+                raise typer.BadParameter(f"Artifact integrity failure: {manifest_path}")
+            file = path / name
+            if file_hash(file) != artifact["sha256"] or file.stat().st_size != artifact["size_bytes"]:
+                raise typer.BadParameter(f"Artifact integrity failure: {manifest_path}")
+    except typer.BadParameter:
+        raise
+    except (OSError, ValueError, TypeError, KeyError) as exc:
+        raise typer.BadParameter(f"{manifest_path}: {exc}") from None
     typer.echo("Manifest and artifact hashes are valid. Server checks parent compatibility and tensors.")
+
+
+def fail(message):
+    typer.echo(message, err=True)
+    raise typer.Exit(1)
+
+
+def write_upload_state(path: Path, state: dict):
+    fd, name = tempfile.mkstemp(dir=path.parent, prefix=".delta-upload-", suffix=".tmp")
+    temporary = Path(name)
+    try:
+        with os.fdopen(fd, "w") as stream:
+            json.dump(state, stream)
+            stream.flush()
+            os.fsync(stream.fileno())
+        temporary.replace(path)
+        os.chmod(path, 0o600)
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
+
+
+def upload_url_allowed(url):
+    if not isinstance(url, str):
+        return False
+    try:
+        parsed = urlsplit(url)
+        port = parsed.port
+    except ValueError:
+        return False
+    if parsed.username or parsed.password or parsed.hostname is None:
+        return False
+    if parsed.scheme == "https":
+        return True
+    return parsed.scheme == "http" and parsed.hostname in {"127.0.0.1", "localhost"} and port is not None
+
+
+def put_artifact(directory: Path, name: str, url):
+    """Upload one manifest artifact. Errors name the artifact and never the signed URL."""
+    if not isinstance(name, str) or Path(name).name != name:
+        fail("Upload failed: the server returned an unexpected filename.")
+    if not upload_url_allowed(url):
+        fail(f"Upload failed for {name}: the upload URL is not allowed.")
+    file = directory / name
+    try:
+        with file.open("rb") as stream:
+            response = httpx.put(url, content=stream, headers={"Content-Length": str(file.stat().st_size)}, timeout=600, follow_redirects=False)
+    except (httpx.HTTPError, httpx.InvalidURL, OSError):
+        fail(f"Upload failed for {name}. Check the connection and rerun the same submit command.")
+    if response.status_code < 200 or response.status_code >= 300:
+        fail(f"Upload failed for {name} (HTTP {response.status_code}).")
+
+
+def pending_upload_files(manifest: dict, upload):
+    """Map URLs to manifest names without opening server-selected paths."""
+    if not isinstance(upload, dict) or not isinstance(upload.get("id"), str) or not upload["id"]:
+        fail("Upload failed: the server returned an invalid upload session.")
+    files = upload.get("files")
+    if not isinstance(files, list):
+        fail("Upload failed: the server returned an invalid upload session.")
+    names = {artifact["name"] for artifact in manifest["artifacts"]}
+    urls = {}
+    for item in files:
+        if isinstance(item, dict) and isinstance(item.get("name"), str) and item["name"] in names:
+            if item["name"] in urls:
+                fail("Upload failed: duplicate artifact URLs in upload session.")
+            urls[item["name"]] = item.get("url")
+    return [{"name": artifact["name"], "url": urls.get(artifact["name"])}
+            for artifact in manifest["artifacts"]]
 
 
 @app.command()
@@ -247,24 +450,54 @@ def submit(path: Path, title: str = "Weight modification", pr: str | None = None
         manifest["research"] = {"pr_url": pr}
     # Persist intent before posting: retries after a lost response reuse the same idempotency key.
     state_path = path / ".delta-upload.json"
-    state = json.loads(state_path.read_text()) if state_path.exists() else {}
-    fingerprint = __import__("hashlib").sha256(json.dumps(manifest, sort_keys=True).encode()).hexdigest()
-    if state.get("fingerprint") != fingerprint or state.get("api") != API:
+    try:
+        state = json.loads(state_path.read_text()) if state_path.exists() else {}
+    except (OSError, ValueError):
+        state = {}
+    if not isinstance(state, dict):
+        state = {}
+    fingerprint = hashlib.sha256(json.dumps(manifest, sort_keys=True).encode()).hexdigest()
+    pending = state.get("pending_files", [])
+    reusable = (state.get("fingerprint") == fingerprint and state.get("api") == API
+                and isinstance(state.get("upload_id"), str) and bool(state["upload_id"])
+                and isinstance(state.get("idempotency_key"), str) and bool(state["idempotency_key"])
+                and isinstance(pending, list))
+    if pending and reusable:
+        expires = state.get("expires_at", 0)
+        reusable = type(expires) in (int, float) and expires > time.time()
+    if not reusable:
+        expires_at = time.time() + 3600
         upload = call("POST", "upload-sessions", json={"manifest": manifest})
-        for f in upload["files"]:
-            file = path / f["name"]
-            with file.open("rb") as stream:
-                response = httpx.put(f["url"], content=stream, headers={"Content-Length": str(file.stat().st_size)}, timeout=600)
-                response.raise_for_status()
-        state = {"upload_id": upload["id"], "idempotency_key": str(uuid.uuid4()), "fingerprint": fingerprint, "api": API}
-        state_path.write_text(json.dumps(state))
+        pending = pending_upload_files(manifest, upload)
+        state = {"upload_id": upload["id"], "idempotency_key": str(uuid.uuid4()),
+                 "fingerprint": fingerprint, "api": API, "title": title,
+                 "pending_files": pending, "expires_at": expires_at, "submission_started": False}
+    elif "title" in state and state["title"] != title:
+        if state.get("submission_started", not bool(pending)):
+            fail("Submission title is already fixed. Retry with the original title.")
+        state.update(title=title, idempotency_key=str(uuid.uuid4()))
+    # Legacy completed state keeps its key, including when its title is unknown.
+    state.setdefault("title", title)
+    write_upload_state(state_path, state)
+    names = {artifact["name"] for artifact in manifest["artifacts"]}
+    while state.get("pending_files"):
+        item = state["pending_files"][0]
+        if not isinstance(item, dict) or not isinstance(item.get("name"), str) or item["name"] not in names:
+            fail("Upload failed: saved session contains an unexpected artifact.")
+        put_artifact(path, item["name"], item.get("url"))
+        state["pending_files"].pop(0)
+        write_upload_state(state_path, state)
+    # Persist before POST: a lost response may already have finalized the upload.
+    state["submission_started"] = True
+    write_upload_state(state_path, state)
     show(call("POST", "submissions", json={"upload_id": state["upload_id"], "title": title}, headers={"Idempotency-Key": state["idempotency_key"]}))
+
 
 
 @submission_app.command("status")
 def status(submission: str, watch: bool = False):
     while True:
-        data = call("GET", f"submissions/{submission}")
+        data = call("GET", f"submissions/{submission}", retries=POLL_RETRIES if watch else 0)
         show(data)
         if not watch or data["state"] in {"verified", "rejected", "failed", "canceled"}:
             return
@@ -273,13 +506,68 @@ def status(submission: str, watch: bool = False):
 
 @submission_app.command("results")
 def results(submission: str, json_output: bool = typer.Option(False, "--json")):
-    show(call("GET", f"submissions/{submission}")["result"])
+    result = call("GET", f"submissions/{submission}")["result"]
+    if json_output or not isinstance(result, dict):
+        show(result)
+        return
+    lines = [f"{key}: {value}" for key, value in result.items() if isinstance(value, (str, int, float, bool)) or value is None]
+    typer.echo("\n".join(lines) if lines else json.dumps(result, indent=2))
+
+
+Z = 1.96
+
+
+def plain(text, width):
+    return re.sub(r"[\x00-\x1f\x7f-\x9f]", "?", str(text))[:width]
+
+
+def render_board(board):
+    """Plain-text leaderboard: test scores with standard errors and each scored row's gap to the top scored row."""
+    num = lambda v: "—" if v is None else f"{v:.2f}"
+    ok = lambda v: isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+    table, scored = [["rank", "name", "submitter", "validation", "test ± se", "gap to top"]], []
+    for r in board["rows"]:
+        res = r.get("result") or {}
+        test, se = res.get("test_score"), (res.get("stats") or {}).get("test_standard_error")
+        test_ok, se_ok = ok(test), ok(se) and se >= 0
+        who = "original" if r.get("parent_id") is None else plain((r.get("submitter") or {}).get("username") or "—", 24)
+        name = plain(r.get("name") or "—", 40)
+        rank = r.get("rank")
+        vscore = res.get("validation_score")
+        table.append(["—" if rank is None else str(rank), name, who, num(vscore if ok(vscore) else None),
+                      (num(test) if test_ok else "—") + (f" ± {se:.2f}" if se_ok else ""), "—"])
+        if res.get("state") == "complete" and test_ok:
+            scored.append((len(table) - 1, test, se if se_ok else None))
+    if scored:
+        top = max(scored, key=lambda s: s[1])
+        for i, test, se in scored:
+            if i != top[0]:
+                gap = test - top[1]
+                table[i][5] = f"{gap:+.2f}" + (" *" if se is not None and top[2] is not None
+                                                  and abs(gap) <= Z * math.hypot(se, top[2]) else "")
+    widths = [max(map(len, col)) for col in zip(*table)]
+    lines = ["  ".join(c.ljust(w) for c, w in zip(row, widths)).rstrip() for row in table]
+    if not any(se is not None for _, _, se in scored):
+        return "\n".join(lines + ["", "No standard errors reported."])
+    if len(scored) < 2:
+        return "\n".join(lines)
+    return "\n".join(lines + ["",
+        "* gap within 1.96·√(se_row² + se_top²), an independence-based heuristic. Rows share test items, so their paired difference can be resolved more tightly than this band.",
+        "Inside the band is not evidence two rows are equal; outside it is conservative only when per-item results are non-negatively correlated."])
 
 
 @app.command()
-def leaderboard(model: str | None = None):
-    show(call("GET", "leaderboard", params={"model": model} if model else {}))
+def leaderboard(model: str | None = None,
+                table: bool = typer.Option(False, "--table", help="Print scores with standard errors and each row's gap to the top scored row.")):
+    if table and not model:
+        raise typer.BadParameter("--table needs --model: rows are compared within one competition.")
+    board = call("GET", "leaderboard", params={"model": model} if model else {})
+    if table:
+        typer.echo(render_board(board))
+    else:
+        show(board)
 
 
 app.command("run")(run)
 app.command("evaluate")(evaluate)
+app.command("compare")(compare)
