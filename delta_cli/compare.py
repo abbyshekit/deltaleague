@@ -84,6 +84,9 @@ def compare_reports(baseline, candidate, resamples=10000, seed=0):
     public = base.get('report_format') == 'public'
     if public != (cand.get('report_format') == 'public'):
         raise ValueError('Cannot compare public-evaluator and legacy local reports.')
+    engine_keys = ('evaluator', 'text_engine', 'text_engine_version', 'task_protocol')
+    if not public and any(base.get(key) != cand.get(key) for key in engine_keys):
+        raise ValueError('Reports use different evaluators; rerun both with the same CLI evaluator version.')
     if base.get('config_id') != cand.get('config_id') or base.get('validation_sha256') != cand.get('validation_sha256'):
         raise ValueError('Reports use a different evaluation configuration.')
     if base.get('model_id') != cand.get('model_id'):
