@@ -142,6 +142,8 @@ def public_examples(workspace, config, benchmark=None, limit=None):
     if file_hash(path) != config['validation_sha256']:
         raise ValueError('Public validation data changed; initialize a fresh workspace.')
     data = json.loads(path.read_text())
+    if not isinstance(data, dict):
+        raise ValueError('Public validation data must be an object of benchmarks.')
     names = config['validation_names']
     if set(data) != set(names) or not names:
         raise ValueError('Public validation benchmark inventory mismatch.')
@@ -150,9 +152,14 @@ def public_examples(workspace, config, benchmark=None, limit=None):
     selected = [benchmark] if benchmark else names
     rows = []
     for name in selected:
-        if not data[name]:
+        examples = data[name]
+        if not isinstance(examples, list):
+            raise ValueError(f'Invalid benchmark: {name}')
+        if not examples:
             raise ValueError(f'Empty benchmark: {name}')
-        for index, example in enumerate(data[name][:limit] if limit else data[name]):
+        for index, example in enumerate(examples[:limit] if limit else examples):
+            if not isinstance(example, dict):
+                raise ValueError(f'Invalid example in {name}.')
             scorer = example.get('scorer', 'exact')
             if scorer not in {'exact', 'choice', 'math', 'ifeval'}:
                 raise ValueError(f'Unsupported scorer: {scorer}')
