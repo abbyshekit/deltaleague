@@ -9,7 +9,7 @@ import statistics
 import tempfile
 import time
 
-from .artifacts import file_hash, reconstruct, validate_manifest
+from .artifacts import file_hash, reconstruct, validate_manifest, verify_artifact_bytes
 from .scoring import score_answer
 
 
@@ -30,17 +30,14 @@ def model_directory(workspace, metadata, weights=None, patch=None, parent=None):
     if weights and patch:
         raise ValueError('Choose either --weights or --patch.')
     parent = parent or workspace / 'model'
-    for artifact in metadata['files']:
-        name = artifact['name']
-        if Path(name).name != name:
-            raise ValueError('Invalid model artifact filename.')
-        if name == 'model.safetensors' and weights:
-            continue
-        path = parent / name
-        if path.stat().st_size != artifact['size_bytes'] or file_hash(path) != artifact['sha256']:
-            raise ValueError(f'Parent artifact changed: {name}. Keep the parent untouched and use --weights or --patch.')
+    files = metadata['files']
+    if weights:
+        files = [artifact for artifact in files if not (isinstance(artifact, dict) and artifact.get('name') == 'model.safetensors')]
+    digests = verify_artifact_bytes(parent, files)
     if not weights and not patch:
-        yield parent, {'kind': 'parent', 'weights_sha256': file_hash(parent / 'model.safetensors')}
+        if 'model.safetensors' not in digests:
+            raise ValueError('Parent artifact changed: model.safetensors. Keep the parent untouched.')
+        yield parent, {'kind': 'parent', 'weights_sha256': digests['model.safetensors']}
         return
     with tempfile.TemporaryDirectory(prefix='delta-local-') as temp:
         target = Path(temp)
@@ -154,9 +151,15 @@ def load_validation(path, config=None):
         data = json.loads(raw)
     except ValueError as exc:
         raise ValueError(f'Cannot read validation file {path}: {exc}') from exc
-    if not isinstance(data, dict) or not data or not all(
-            isinstance(v, list) and all(isinstance(e, dict) for e in v) for v in data.values()):
-        raise ValueError('Validation file must map benchmark names to lists of example objects.')
+    if not isinstance(data, dict) or not data:
+        raise ValueError('Validation data must be a non-empty object of benchmarks containing example objects.')
+    for name, examples in data.items():
+        if not name or any(ord(c) < 32 or 127 <= ord(c) <= 159 for c in name):
+            raise ValueError('Invalid benchmark name.')
+        if not isinstance(examples, list):
+            raise ValueError(f'Invalid benchmark: {name}; expected a list of example objects.')
+        if not all(isinstance(example, dict) for example in examples):
+            raise ValueError(f'Invalid example in {name}; expected example objects.')
     if config is None:
         return data, list(data), sha
     names = config['validation_names']
@@ -187,7 +190,10 @@ def public_examples(workspace, config, benchmark=None, limit=None, validation_fi
     selected = [benchmark] if benchmark else names
     rows = []
     for name in selected:
-        if not data[name]:
+        examples = data[name]
+        if not isinstance(examples, list):
+            raise ValueError(f'Invalid benchmark: {name}')
+        if not examples:
             raise ValueError(f'Empty benchmark: {name}')
         for index, example in enumerate(data[name][:limit] if limit else data[name]):
             if not all(isinstance(example.get(k), str) and example[k] for k in ('id', 'prompt')):
@@ -211,21 +217,38 @@ def public_examples(workspace, config, benchmark=None, limit=None, validation_fi
     return rows, selected, full, sha
 
 
+def generations_path(report):
+    """Path of the generations file written beside an evaluation report."""
+    return Path(report).with_suffix('.generations.jsonl')
+
+
+def example_means(rows):
+    """Per benchmark: mean sample score by example, truncation rate and mean output tokens."""
+    grouped = {}
+    for row in rows:
+        group = grouped.setdefault(row['benchmark'], {'scores': {}, 'truncated': [], 'tokens': []})
+        group['scores'].setdefault(row['example_index'], []).append(row['score'])
+        group['truncated'].append(bool(row['truncated']))
+        group['tokens'].append(row['tokens'])
+    return {name: {'examples': {k: statistics.mean(v) for k, v in g['scores'].items()},
+                   'truncation_rate': statistics.mean(g['truncated']), 'mean_tokens': statistics.mean(g['tokens'])}
+            for name, g in grouped.items()}
+
+
 def evaluate(runner, tasks, generation, stream, progress):
-    scores, tokens, seconds, truncated = {}, 0, 0, 0
+    rows, tokens, seconds, truncated = [], 0, 0, 0
     for index, task in enumerate(tasks, 1):
         result = runner.generate(task['example']['prompt'], generation, task['seed'])
         score = score_answer(task['example'], result['text'])
-        scores.setdefault(task['benchmark'], {}).setdefault(task['example_index'], []).append(score)
         row = {k: v for k, v in task.items() if k != 'example'}
         row.update(example_id=task['example']['id'], score=score, **result)
+        rows.append({k: row[k] for k in ('benchmark', 'example_index', 'example_id', 'score', 'truncated', 'tokens')})
         stream.write(json.dumps(row) + '\n')
         stream.flush()
         tokens += result['tokens']
         seconds += result['generation_seconds']
         truncated += result['truncated']
         progress(index, len(tasks), task['benchmark'])
-    components = {name: statistics.mean(statistics.mean(samples) for samples in examples.values()) * 100
-                  for name, examples in scores.items()}
+    components = {name: statistics.mean(v['examples'].values()) * 100 for name, v in example_means(rows).items()}
     return {'validation_score': statistics.mean(components.values()), 'validation_benchmarks': components,
             'output_tokens': tokens, 'generation_seconds': seconds, 'truncation_rate': truncated / len(tasks)}

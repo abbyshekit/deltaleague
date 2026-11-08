@@ -80,14 +80,41 @@ def evaluate(workspace: Path = Path('.'), version: str | None = None,
              max_new_tokens: int | None = typer.Option(None, min=1),
              thinking: bool | None = typer.Option(None, '--thinking/--no-thinking'),
              validation_file: Path | None = typer.Option(None, '--validation'),
-             output: Path = Path('local-results.json')):
-    """Evaluate public validation, or a custom item file with --validation. --limit caps examples per benchmark; output is never an official score."""
+             output: Path = Path('local-results.json'),
+             endpoint: str | None = None, served_model: str = 'candidate',
+             content_hash: str | None = None, tokenizer: Path | None = None,
+             concurrency: int = typer.Option(32, min=1, max=256)):
+    """Evaluate public validation; advisory only. Pinned suites need --endpoint and --content-hash.
+
+    Limits, checkpoint selectors and generation overrides apply only to legacy configurations.
+    """
     try:
         root, _, config, _ = local.read_workspace(workspace)
+        if validation_file and (endpoint or content_hash or tokenizer):
+            raise ValueError('--validation uses local inference; do not combine it with endpoint options.')
+        if config.get('protocol_version') == 'delta-public-v1' and validation_file is None:
+            if not endpoint or not content_hash:
+                raise ValueError('This configuration uses the pinned public evaluator. Supply --endpoint and '
+                                 '--content-hash for your served checkpoint, or use `delta public-eval run --help`. '
+                                 'See PUBLIC_EVALUATION.md for the isolated runtime setup.')
+            if version or weights or patch or benchmark or limit or max_new_tokens is not None or thinking is not None:
+                raise ValueError('The pinned evaluator uses the complete frozen suite and its own generation settings. '
+                                 'Serve your chosen checkpoint first; use --content-hash to identify it.')
+            if local.file_hash(root / 'validation.json') != config['validation_sha256']:
+                raise ValueError('Public validation data changed; initialize a fresh workspace.')
+            from .public_eval.cli import run_command
+            run_command(endpoint=endpoint, model=served_model, tokenizer=tokenizer or root / 'model',
+                        content_hash=content_hash, manifest=root / 'validation.json', concurrency=concurrency,
+                        output=Path('public-results') if output == Path('local-results.json') else output,
+                        evaluation_config=root / 'evaluation.json')
+            return
+        if endpoint or content_hash or tokenizer:
+            raise ValueError('Endpoint evaluation requires a delta-public-v1 configuration.')
         path = (validation_file or root / 'validation.json').resolve()
-        tasks, names, full, sha = local.public_examples(root, config, benchmark, limit, path if validation_file else None)
+        tasks, names, full, sha = local.public_examples(root, config, benchmark, limit,
+                                                      validation_file=path if validation_file else None)
         output = output.resolve()
-        generations = output.with_suffix('.generations.jsonl')
+        generations = local.generations_path(output)
         if output.exists() or generations.exists():
             raise ValueError('Output already exists. Choose a new --output path to preserve previous results.')
         output.parent.mkdir(parents=True, exist_ok=True)
@@ -99,8 +126,9 @@ def evaluate(workspace: Path = Path('.'), version: str | None = None,
                     lambda index, total, name: typer.echo(f'[{index}/{total}] {name}', err=True))
             report = {**details, **result, 'complete': True, 'full_validation_set': full,
                       'selected_benchmarks': names, 'examples_per_benchmark_limit': limit,
-                      'validation_sha256': sha,
-                      'validation_file': str(path), 'generations_file': str(generations),
+                      'validation_sha256': sha, 'validation_file': str(path),
+                      'validation_kind': 'custom' if validation_file else 'workspace',
+                      'generations_file': str(generations),
                       'note': 'Advisory local score. Hardware/backend differences affect results; this is not a verified leaderboard score.'}
             with output.open('x') as stream:
                 json.dump(report, stream, indent=2)
