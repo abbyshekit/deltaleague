@@ -107,6 +107,66 @@ def test_thinking_and_choice_scoring():
     assert local.score_answer({'answer': '4', 'scorer': 'math'}, r'\boxed{4}') == 1
 
 
+def test_ifeval_scorer_and_unknown_scorer(monkeypatch):
+    import sys
+    import types
+
+    class Instruction:
+        def __init__(self, instruction_id):
+            self.instruction_id = instruction_id
+        def build_description(self, **kwargs):
+            self.prompt = kwargs.get('prompt')
+        def get_instruction_args(self):
+            return {'prompt': None} if self.instruction_id == 'prompted' else None
+        def check_following(self, answer):
+            return answer == 'yes'
+
+    registry = types.ModuleType('lm_eval.tasks.ifeval.instructions_registry')
+    registry.INSTRUCTION_DICT = {'plain': Instruction, 'prompted': Instruction}
+    for name in ('lm_eval', 'lm_eval.tasks', 'lm_eval.tasks.ifeval'):
+        if name not in sys.modules:
+            monkeypatch.setitem(sys.modules, name, types.ModuleType(name))
+    monkeypatch.setitem(sys.modules, 'lm_eval.tasks.ifeval.instructions_registry', registry)
+    plain = {'scorer': 'ifeval', 'prompt': 'Say yes', 'instruction_id_list': ['plain'], 'kwargs': [{}]}
+    assert local.score_answer(plain, 'yes') == 1
+    assert local.score_answer(plain, 'no') == 0
+    prompted = {'scorer': 'ifeval', 'prompt': 'Say yes', 'instruction_id_list': ['prompted'], 'kwargs': [{}]}
+    assert local.score_answer(prompted, 'yes') == 1
+    with pytest.raises(ValueError, match='unknown_scorer'):
+        local.score_answer({'scorer': 'bleu', 'answer': 'x'}, 'x')
+
+
+def test_generate_rejects_an_over_budget_prompt_and_marks_truncation():
+    class Batch(dict):
+        def to(self, device):
+            return self
+
+    class Tokenizer:
+        eos_token = None
+        pad_token = None
+        def apply_chat_template(self, *args, **kwargs):
+            return 'prompt'
+        def __call__(self, text, return_tensors, add_special_tokens):
+            return Batch(input_ids=torch.ones(1, 100, dtype=torch.long))
+        def decode(self, tokens, skip_special_tokens=False):
+            return 'answer'
+
+    class Model:
+        def generate(self, **kwargs):
+            count = kwargs['max_new_tokens']
+            return torch.zeros(1, 100 + count, dtype=torch.long)
+
+    runner = local.Runner.__new__(local.Runner)
+    runner.tokenizer = Tokenizer()
+    runner.model = Model()
+    runner.torch = torch
+    runner.device = 'cpu'
+    with pytest.raises(ValueError, match='max_model_len'):
+        runner.generate('hi', {'max_tokens': 20, 'max_model_len': 110, 'temperature': 0}, 1)
+    result = runner.generate('hi', {'max_tokens': 4, 'max_model_len': 200, 'temperature': 0, 'enable_thinking': False}, 1)
+    assert result['truncated'] is True and result['tokens'] == 4 and result['text'] == 'answer'
+
+
 def test_device_selection_and_unavailable_device():
     fake = SimpleNamespace(cuda=SimpleNamespace(is_available=lambda: False), backends=SimpleNamespace(mps=SimpleNamespace(is_available=lambda: True)))
     assert local.select_device(fake, 'auto') == 'mps'
@@ -138,6 +198,92 @@ def test_cli_evaluation_report_and_existing_output_protection(workspace, monkeyp
     result = runner.invoke(main.app, args)
     assert result.exit_code == 1 and 'already exists' in result.output
     assert output.read_bytes() == original
+
+
+def test_weights_overlay_links_checkpoint_and_rejects_invalid_input(workspace):
+    root, metadata, _ = workspace
+    weights = root / 'candidate.safetensors'
+    save_file({'layer.weight': torch.tensor([3., 4.])}, str(weights))
+    with local.model_directory(root, metadata, weights=weights) as (directory, identity):
+        link = directory / 'model.safetensors'
+        assert identity['kind'] == 'weights' and link.is_symlink()
+        assert file_hash(link) == file_hash(weights)
+        assert (directory / 'config.json').is_symlink()
+    with pytest.raises(ValueError, match='either'):
+        with local.model_directory(root, metadata, weights=weights, patch=root / 'patch'):
+            pass
+    binary = root / 'weights.bin'
+    binary.write_bytes(b'nope')
+    with pytest.raises(ValueError, match='safetensors'):
+        with local.model_directory(root, metadata, weights=binary):
+            pass
+    config = root / 'model' / 'config.json'
+    original = config.read_text()
+    config.write_text('mutated')
+    try:
+        with pytest.raises(ValueError, match='config.json'):
+            with local.model_directory(root, metadata):
+                pass
+    finally:
+        config.write_text(original)
+
+
+def test_read_workspace_rejects_mismatched_config_model_and_parent(workspace):
+    root, _, _ = workspace
+    local.read_workspace(root)
+    edits = [
+        (root / 'delta-workspace.json', 'model_id', 'other'),
+        (root / 'delta-workspace.json', 'config_id', 'other'),
+        (root / 'delta-workspace.json', 'parent_version_id', '00000000-0000-0000-0000-000000000099'),
+        (root / 'evaluation.json', 'model_id', 'other'),
+        (root / 'model' / 'delta-model.json', 'model_id', 'other'),
+    ]
+    for path, key, value in edits:
+        saved = path.read_text()
+        data = json.loads(saved)
+        data[key] = value
+        path.write_text(json.dumps(data))
+        try:
+            with pytest.raises(ValueError, match='mismatch'):
+                local.read_workspace(root)
+        finally:
+            path.write_text(saved)
+
+
+def rehash(root, config, data):
+    path = root / 'validation.json'
+    path.write_text(json.dumps(data))
+    updated = dict(config)
+    updated['validation_sha256'] = file_hash(path)
+    return updated
+
+
+def test_public_examples_rejects_unknown_benchmark_empty_and_invalid_samples(workspace):
+    root, _, config = workspace
+    with pytest.raises(ValueError, match='Unknown benchmark'):
+        local.public_examples(root, config, benchmark='missing')
+    data = json.loads((root / 'validation.json').read_text())
+    empty = rehash(root, config, {**data, 'a': []})
+    with pytest.raises(ValueError, match='Empty benchmark'):
+        local.public_examples(root, empty)
+    bad_scorer = json.loads(json.dumps(data))
+    bad_scorer['a'][0]['scorer'] = 'bleu'
+    with pytest.raises(ValueError, match='Unsupported scorer'):
+        local.public_examples(root, rehash(root, config, bad_scorer))
+    for samples in (0, 17, '2'):
+        counted = json.loads(json.dumps(data))
+        counted['a'][0]['samples'] = samples
+        with pytest.raises(ValueError, match='Invalid sample count'):
+            local.public_examples(root, rehash(root, config, counted))
+    with pytest.raises(ValueError, match='object of benchmarks'):
+        local.public_examples(root, rehash(root, config, []))
+    nested = {**data, 'a': {'prompt': 'A'}}
+    with pytest.raises(ValueError, match='Invalid benchmark'):
+        local.public_examples(root, rehash(root, config, nested))
+    row = json.loads(json.dumps(data))
+    row['a'] = ['yes']
+    with pytest.raises(ValueError, match='Invalid example'):
+        local.public_examples(root, rehash(root, config, row))
 
 
 def test_leaderboard_version_model_mismatch_is_rejected(workspace, monkeypatch):
