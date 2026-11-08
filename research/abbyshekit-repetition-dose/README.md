@@ -62,7 +62,7 @@ Local estimates only; the generation screen is capped at 4,096 tokens, so it mea
 
 ## Submission
 - Arm 1 (K = 1.5): submission `a6ddce3e-b337-4249-b893-6dfd6a4c51dc`, submitted 2026-11-05T00:06Z; version `e75e2ed5-4b15-40d7-b7a9-75acb45faf14`, verified 2026-11-05T00:36Z on `public-ladder500-8k-v2`
-- Arm 2 (K = 2.0): pending
+- Arm 2 (K = 2.0): not submitted. Arm 1 met the falsification condition, so the second slot was not spent on a larger step along the same direction; the built patch and its manifest (`results/manifest-k2.0.json`) remain for anyone who wants that point.
 
 ## Results
 Arm 1 against the parent version and the original model, all on `public-ladder500-8k-v2` (leaderboard and submission API, 2026-11-05):
