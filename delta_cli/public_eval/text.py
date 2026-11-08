@@ -51,8 +51,13 @@ def verify_tasks(tasks, selection):
             raise ValueError(f'{name}: selected documents changed')
 
 
-def run(manifest, group, endpoint, model, tokenizer, output, *, concurrency=32, generation=None):
+def evaluate_tasks(**kwargs):
+    """One native text evaluation engine for frozen suites and custom task adapters."""
     from lm_eval import evaluator
+    return evaluator.simple_evaluate(**kwargs)
+
+
+def run(manifest, group, endpoint, model, tokenizer, output, *, concurrency=32, generation=None):
     from langdetect import DetectorFactory
     DetectorFactory.seed = manifest['seed']
     from lm_eval.models.openai_completions import LocalCompletionsAPI
@@ -83,7 +88,7 @@ def run(manifest, group, endpoint, model, tokenizer, output, *, concurrency=32, 
         tokenized_requests=False, seed=manifest['seed'])
     options = {'gen_kwargs': {**sampling(generation), 'max_gen_toks': generation['max_tokens'],
                               'do_sample': True, 'until': []}} if generation and generative else {}
-    result = evaluator.simple_evaluate(model=backend, tasks=list(tasks.values()),
+    result = evaluate_tasks(model=backend, tasks=list(tasks.values()),
         samples={name: e['indices'] for name, e in spec['selection'].items()},
         apply_chat_template=generative, bootstrap_iters=1000, log_samples=True,
         random_seed=manifest['seed'], numpy_random_seed=manifest['seed'],
