@@ -1,0 +1,51 @@
+{
+ "families": {
+  "arc_fresh": {
+   "workflow_accepted": 107,
+   "workflow_rejected": 302,
+   "written": 420,
+   "rounds": 11,
+   "vetoed": 0,
+   "sealed": 107,
+   "veto_reasons": [],
+   "letter_balance": {
+    "A": 34,
+    "B": 26,
+    "C": 24,
+    "D": 23
+   },
+   "letter_balance_after_rotation": {
+    "A": 27,
+    "B": 27,
+    "C": 27,
+    "D": 26
+   }
+  },
+  "gsm_fresh": {
+   "workflow_accepted": 100,
+   "workflow_rejected": 11,
+   "written": 120,
+   "rounds": 3,
+   "vetoed": 0,
+   "sealed": 100,
+   "veto_reasons": [],
+   "letter_balance": null
+  },
+  "math_fresh": {
+   "workflow_accepted": 106,
+   "workflow_rejected": 236,
+   "written": 360,
+   "rounds": 9,
+   "vetoed": 0,
+   "sealed": 106,
+   "veto_reasons": [],
+   "letter_balance": null
+  }
+ },
+ "sha256": "1c94d96e688c15339c86ff37e0fe3d809c434a5dca650c4324858a8c3a7cec4a",
+ "public_sets": {
+  "arc_challenge": 1172,
+  "gsm8k": 1319,
+  "math500": 500
+ }
+}

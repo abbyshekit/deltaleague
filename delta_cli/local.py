@@ -1,5 +1,6 @@
 """Offline text inference and public validation; no platform or private-data imports."""
 from contextlib import contextmanager
+import hashlib
 from importlib.metadata import version
 import json
 import os
@@ -8,8 +9,16 @@ import statistics
 import tempfile
 import time
 
-from .artifacts import file_hash, reconstruct, validate_manifest
+from .artifacts import file_hash, reconstruct, validate_manifest, verify_artifact_bytes
 from .scoring import score_answer
+
+
+def generation_settings(config):
+    """Use the versioned public generation profile when the workspace has one."""
+    generation = config['generation']
+    if config.get('protocol_version') == 'delta-public-v1':
+        return dict(generation.get('public_validation', generation))
+    return dict(generation)
 
 
 def read_workspace(workspace):
@@ -29,17 +38,14 @@ def model_directory(workspace, metadata, weights=None, patch=None, parent=None):
     if weights and patch:
         raise ValueError('Choose either --weights or --patch.')
     parent = parent or workspace / 'model'
-    for artifact in metadata['files']:
-        name = artifact['name']
-        if Path(name).name != name:
-            raise ValueError('Invalid model artifact filename.')
-        if name == 'model.safetensors' and weights:
-            continue
-        path = parent / name
-        if path.stat().st_size != artifact['size_bytes'] or file_hash(path) != artifact['sha256']:
-            raise ValueError(f'Parent artifact changed: {name}. Keep the parent untouched and use --weights or --patch.')
+    files = metadata['files']
+    if weights:
+        files = [artifact for artifact in files if not (isinstance(artifact, dict) and artifact.get('name') == 'model.safetensors')]
+    digests = verify_artifact_bytes(parent, files)
     if not weights and not patch:
-        yield parent, {'kind': 'parent', 'weights_sha256': file_hash(parent / 'model.safetensors')}
+        if 'model.safetensors' not in digests:
+            raise ValueError('Parent artifact changed: model.safetensors. Keep the parent untouched.')
+        yield parent, {'kind': 'parent', 'weights_sha256': digests['model.safetensors']}
         return
     with tempfile.TemporaryDirectory(prefix='delta-local-') as temp:
         target = Path(temp)
@@ -105,7 +111,7 @@ class Runner:
         from transformers import LogitsProcessor, LogitsProcessorList, set_seed
         torch = self.torch
         rendered = self.tokenizer.apply_chat_template([{'role': 'user', 'content': prompt}], tokenize=False,
-                    add_generation_prompt=True, enable_thinking=generation.get('enable_thinking', True))
+                    add_generation_prompt=True, enable_thinking=generation.get('enable_thinking', False))
         inputs = self.tokenizer(rendered, return_tensors='pt', add_special_tokens=False).to(self.device)
         prompt_length = inputs['input_ids'].shape[1]
         max_tokens = generation.get('max_tokens', 32768)
@@ -140,25 +146,70 @@ class Runner:
                 'generation_seconds': time.monotonic() - start}
 
 
-def public_examples(workspace, config, benchmark=None, limit=None):
-    path = workspace / 'validation.json'
-    if file_hash(path) != config['validation_sha256']:
+def load_validation(path, config=None):
+    """Read a validation file; with a workspace config, require its recorded hash and inventory."""
+    try:
+        raw = Path(path).read_bytes()
+    except OSError as exc:
+        raise ValueError(f'Cannot read validation file {path}: {exc}') from exc
+    sha = hashlib.sha256(raw).hexdigest()
+    if config is not None and sha != config['validation_sha256']:
         raise ValueError('Public validation data changed; initialize a fresh workspace.')
-    data = json.loads(path.read_text())
+    try:
+        data = json.loads(raw)
+    except ValueError as exc:
+        raise ValueError(f'Cannot read validation file {path}: {exc}') from exc
+    if not isinstance(data, dict) or not data:
+        raise ValueError('Validation data must be a non-empty object of benchmarks containing example objects.')
+    for name, examples in data.items():
+        if not name or any(ord(c) < 32 or 127 <= ord(c) <= 159 for c in name):
+            raise ValueError('Invalid benchmark name.')
+        if not isinstance(examples, list):
+            raise ValueError(f'Invalid benchmark: {name}; expected a list of example objects.')
+        if not all(isinstance(example, dict) for example in examples):
+            raise ValueError(f'Invalid example in {name}; expected example objects.')
+    if config is None:
+        return data, list(data), sha
     names = config['validation_names']
     if set(data) != set(names) or not names:
         raise ValueError('Public validation benchmark inventory mismatch.')
+    return data, names, sha
+
+
+def check_scorer_fields(example, scorer):
+    """Require only the fields delta_cli.scoring reads for this scorer."""
+    if scorer == 'ifeval':
+        ids, kwargs = example.get('instruction_id_list'), example.get('kwargs')
+        if not (isinstance(ids, list) and ids and all(isinstance(i, str) and i for i in ids)):
+            raise ValueError(f"Example {example['id']} (ifeval) needs instruction_id_list: a non-empty list of instruction ids.")
+        if not (isinstance(kwargs, list) and len(kwargs) == len(ids) and all(isinstance(k, dict) for k in kwargs)):
+            raise ValueError(f"Example {example['id']} (ifeval) needs kwargs: a list of objects, one per instruction id.")
+        return
+    answer = example.get('answer')
+    if isinstance(answer, bool) or not (isinstance(answer, (int, float)) or isinstance(answer, str) and answer):
+        raise ValueError(f"Example {example['id']} ({scorer}) needs answer: a non-empty string or a number.")
+
+
+def public_examples(workspace, config, benchmark=None, limit=None, validation_file=None):
+    data, names, sha = load_validation(validation_file or workspace / 'validation.json',
+                                       None if validation_file else config)
     if benchmark and benchmark not in names:
         raise ValueError('Unknown benchmark; choose from: ' + ', '.join(names))
     selected = [benchmark] if benchmark else names
     rows = []
     for name in selected:
-        if not data[name]:
+        examples = data[name]
+        if not isinstance(examples, list):
+            raise ValueError(f'Invalid benchmark: {name}')
+        if not examples:
             raise ValueError(f'Empty benchmark: {name}')
         for index, example in enumerate(data[name][:limit] if limit else data[name]):
+            if not all(isinstance(example.get(k), str) and example[k] for k in ('id', 'prompt')):
+                raise ValueError('Validation examples need id and prompt.')
             scorer = example.get('scorer', 'exact')
             if scorer not in {'exact', 'choice', 'math', 'ifeval'}:
                 raise ValueError(f'Unsupported scorer: {scorer}')
+            check_scorer_fields(example, scorer)
             # Fail on missing scoring dependencies before spending time on inference.
             if scorer == 'math':
                 __import__('math_verify')
@@ -170,24 +221,29 @@ def public_examples(workspace, config, benchmark=None, limit=None):
             for sample in range(samples):
                 rows.append({'benchmark': name, 'example_index': index, 'sample': sample,
                              'seed': 1000 + sample, 'example': example})
-    return rows, selected, not benchmark and all(limit is None or limit >= len(v) for v in data.values())
+    full = validation_file is None and not benchmark and all(limit is None or limit >= len(v) for v in data.values())
+    return rows, selected, full, sha
+
+
+def generations_path(report):
+    """Path of the generations file written beside an evaluation report."""
+    return Path(report).with_suffix('.generations.jsonl')
+
+
+def example_means(rows):
+    """Per benchmark: mean sample score by example, truncation rate and mean output tokens."""
+    grouped = {}
+    for row in rows:
+        group = grouped.setdefault(row['benchmark'], {'scores': {}, 'truncated': [], 'tokens': []})
+        group['scores'].setdefault(row['example_index'], []).append(row['score'])
+        group['truncated'].append(bool(row['truncated']))
+        group['tokens'].append(row['tokens'])
+    return {name: {'examples': {k: statistics.mean(v) for k, v in g['scores'].items()},
+                   'truncation_rate': statistics.mean(g['truncated']), 'mean_tokens': statistics.mean(g['tokens'])}
+            for name, g in grouped.items()}
 
 
 def evaluate(runner, tasks, generation, stream, progress):
-    scores, tokens, seconds, truncated = {}, 0, 0, 0
-    for index, task in enumerate(tasks, 1):
-        result = runner.generate(task['example']['prompt'], generation, task['seed'])
-        score = score_answer(task['example'], result['text'])
-        scores.setdefault(task['benchmark'], {}).setdefault(task['example_index'], []).append(score)
-        row = {k: v for k, v in task.items() if k != 'example'}
-        row.update(example_id=task['example']['id'], score=score, **result)
-        stream.write(json.dumps(row) + '\n')
-        stream.flush()
-        tokens += result['tokens']
-        seconds += result['generation_seconds']
-        truncated += result['truncated']
-        progress(index, len(tasks), task['benchmark'])
-    components = {name: statistics.mean(statistics.mean(samples) for samples in examples.values()) * 100
-                  for name, examples in scores.items()}
-    return {'validation_score': statistics.mean(components.values()), 'validation_benchmarks': components,
-            'output_tokens': tokens, 'generation_seconds': seconds, 'truncation_rate': truncated / len(tasks)}
+    """Compatibility entry point into the shared evaluator's custom task adapter."""
+    from .public_eval.runner import evaluate_custom
+    return evaluate_custom(runner=runner, tasks=tasks, generation=generation, stream=stream, progress=progress)

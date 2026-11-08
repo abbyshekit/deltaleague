@@ -2,6 +2,12 @@
 
 Local inference uses Transformers and PyTorch. Apple Silicon Macs select MPS, Linux machines with a compatible PyTorch GPU build select CUDA, and other machines use CPU. `--device cpu`, `--device mps`, or `--device cuda` overrides selection. There is no rented compute, server evaluation quota, or automatic submission involved.
 
+For the current `delta-public-v1` competition suite, follow
+[PUBLIC_EVALUATION.md](PUBLIC_EVALUATION.md). Its frozen public evaluation uses a
+served checkpoint and a separate environment. The `delta run` instructions below
+work in current workspaces; all `delta evaluate` examples below apply only to
+legacy flat-example configurations. They do not accept the current grouped suite.
+
 ## Install
 
 From the CLI repository, in a Python 3.12+ virtual environment:
@@ -12,7 +18,7 @@ delta competition init qwen35-08b-v1 --output experiment
 cd experiment
 ```
 
-The extra installs the tested Transformers version and math scorer. For Linux CUDA acceleration, install a compatible CUDA build of PyTorch using [the official installer](https://pytorch.org/get-started/locally/). If your existing PyTorch build is CPU-only, installing the CLI extra will not replace it with a CUDA build. For IFEval configurations, additionally install the CLI's `[ifeval]` extra.
+The extra installs the tested Transformers version, math scorer, and the same pinned `lm-eval==0.4.13` text engine used by the public evaluator. For Linux CUDA acceleration, install a compatible CUDA build of PyTorch using [the official installer](https://pytorch.org/get-started/locally/). If your existing PyTorch build is CPU-only, installing the CLI extra will not replace it with a CUDA build. IFEval dependencies are included.
 
 The portable implementation loads full weights, without automatic quantization. Allow several GB of free RAM for Qwen3.5-0.8B and more for long contexts. CPU/MPS use float32; CUDA uses BF16 where supported. On Macs, unsupported MPS operations can fall back to CPU. If your model encounters an unsupported operator or memory error, try `--device cpu` and lower the output budget. macOS acceleration has not been verified on physical Apple hardware in this release; Linux CPU has been exercised with the actual Qwen checkpoint. CUDA selection is implemented but has not been hardware-tested for this CLI release.
 
@@ -49,7 +55,7 @@ delta evaluate --patch submission --limit 2 --max-new-tokens 256 --output patch-
 
 `--weights` takes a full modified safetensors checkpoint, using the workspace parent's tokenizer and configuration. `--patch` takes a submission directory with `manifest.json`; it checks the parent and artifact hashes, then reconstructs supported LoRA/sparse/dense/full artifacts into a temporary checkpoint. Neither changes the parent. You can combine either with `--version` when editing that leaderboard checkpoint; a patch must reference that exact version. Temporary reconstructed files need disk space roughly equal to a full checkpoint and are removed on completion.
 
-## Evaluate public validation
+## Evaluate legacy public validation
 
 Start small:
 
@@ -66,10 +72,56 @@ delta evaluate --output baseline-full.json
 delta evaluate --weights edited.safetensors --output edit-full.json
 ```
 
-Full evaluation can be expensive locally: the starter configuration permits 32,768 generated tokens per example. The CLI prints the number of generations and upper token budget before loading the model. Use Ctrl-C to interrupt. Completed generation records remain in the JSONL file; no complete score report is written for an interrupted run. Choose a fresh output filename to rerun; automatic resume is not implemented.
+To evaluate your own items (a held-out set, extra samples), pass `--validation FILE` in the `validation.json` format, where `scorer` is `exact`, `choice`, `math` or `ifeval` and `samples` defaults to 1:
+
+```json
+{"my-set": [{"id": "q1", "prompt": "What is 2 + 2?", "answer": "4", "scorer": "math", "samples": 2}]}
+```
+
+Every item needs `id` and `prompt`. `exact`, `choice` and `math` also need `answer` (a non-empty string or a number); `ifeval` needs `instruction_id_list` and a same-length `kwargs` list of objects instead, and no `answer`.
+
+The report's `validation_sha256` is the hash of that file, `validation_file` records its path, and `full_validation_set` is false. `--benchmark` and `--limit` still apply.
+
+Full evaluation can be expensive locally: the starter configuration permits 32,768 generated tokens per example. The CLI prints the number of generations and upper token budget before loading the model. Use Ctrl-C to interrupt. The shared engine scores after generation; an interrupted run may leave an empty JSONL file, and no complete score report is written. Choose a fresh output filename to rerun; automatic resume is not implemented.
 
 The JSON report contains per-benchmark scores, the equal-weight mean across selected benchmarks, per-example sample averaging, checkpoint hash, source version, validation hash, runtime versions, actual generation settings, coverage, and truncation statistics. A companion `*.generations.jsonl` contains answers and per-sample scores. Existing output files are never overwritten.
 
-The local scorer shares the platform's answer-scoring implementation: reasoning traces before `</think>` are excluded, math uses math-verify, and multiple-choice answers follow the same extraction rules. Configured samples use the same per-sample seeds. `--max-new-tokens` and `--thinking/--no-thinking` overrides are recorded explicitly.
+Custom and legacy JSON inputs are task adapters in `delta_cli.public_eval`, executed by the same `lm-eval` text engine as the platform's pinned suite. Local Transformers is an inference backend only. IFEval uses its native strict prompt metric; `exact`, `choice`, and `math` retain the custom JSON task metrics. A custom math/choice prompt is not equivalent to a native benchmark's prompt, few-shot examples, or likelihood protocol. When thinking is enabled, the shared final-answer extractor excludes reasoning and treats an unfinished thought as an empty answer. Thinking defaults to off when absent from the profile. Configured samples keep the per-sample seeds. `--max-new-tokens` and `--thinking/--no-thinking` overrides are recorded explicitly. Pinned-protocol workspaces inherit `generation.public_validation` for custom data. Reports identify the evaluator, engine version, and `custom-json-v1` task protocol.
 
 Scores remain **advisory local results**. Transformers, vLLM, device precision, and sampling implementations can differ even with the same seed. Compare candidates using the same local settings, then submit for the official validation and private test scores. Local evaluation does not upload results or assign a leaderboard rank.
+
+## Compare two runs
+
+For the current public evaluator:
+
+```sh
+delta compare baseline-results/result.json candidate-results/result.json --output compare.json
+```
+
+Both reports must contain the complete pinned suite. The command pairs by
+benchmark/item ID, validates suite and checkpoint identities, and recomputes
+scores from the items. Generation sidecars are unnecessary; token and truncation
+summaries and `generation_differs` are `null` because the contract does not provide
+those comparisons. See [PUBLIC_EVALUATION.md](PUBLIC_EVALUATION.md).
+
+For legacy local reports:
+
+```sh
+delta compare baseline-quick.json edit-quick.json --output compare.json
+delta compare baseline-quick.json edit-quick.json --resamples 10000 --seed 0 --json
+```
+
+Reports from the former CLI scoring loop must be regenerated before comparison with shared-engine reports; `compare` rejects different evaluator identities or versions.
+
+For this legacy format, `compare` reads two `delta evaluate` reports and the `<report>.generations.jsonl` file beside each. Sample scores are averaged per example, then examples are paired by position within each benchmark. It refuses reports with a different `config_id`, `validation_sha256`, or `model_id`, and reports whose benchmark or example sets differ; rerun both with the same `--limit` and `--benchmark`. Different `generation` settings are allowed and flagged `generation_differs`, so decoding changes can be compared.
+
+Per benchmark it reports `n`, both means, the difference, a paired percentile bootstrap 95% interval (examples resampled with replacement; `--resamples` defaults to 10,000, `--seed` to 0), wins, losses, and ties of the candidate, an exact two-sided sign test on the discordant pairs, truncation rates, mean output tokens, and `run_worst_case_se`, the worst-case standard error of one run's mean, `50/sqrt(n)` points. The overall difference uses the platform's equal-weight mean of benchmark means, bootstrapped jointly by resampling within each benchmark; its `run_worst_case_se` is `100 * sqrt(sum(0.25 / n_b)) / B` points for `B` benchmarks. The displayed `1.96 * sqrt(2)` multiple is an independence-based unpaired uncertainty band, not a significance threshold for the paired comparison. The overall result also carries pooled `wins`, `losses`, `ties`, and an exact two-sided `sign_test_p` across all paired examples, and is `separable` only when its interval excludes 0, `sign_test_p` is below 0.05, and pooled wins/losses agree with the direction of the benchmark-weighted difference (`pooled_sign_agrees`). This is an exploratory screen, not a calibrated test of the weighted mean: pooled signs give each item equal weight, while the aggregate gives each benchmark equal weight. Intervals assume independent items within benchmarks and do not account for repeated candidate selection or run-to-run generation variability. A negative screen is not evidence of equivalence.
+
+`--json` prints the full structure and `--output` writes it; an existing output file is never overwritten. The comparison is advisory: official validation and private test scores are authoritative.
+
+A custom `--validation` file is evaluated with local inference even when the
+workspace's official configuration uses `delta-public-v1`. It does not replace
+or modify the pinned public suite. Do not combine `--validation` with `--endpoint`,
+`--content-hash` or `--tokenizer`; those select the pinned external-server path.
+Custom reports record `validation_kind: custom`, the file path and the hash of
+the exact bytes parsed, and always set `full_validation_set: false`.
