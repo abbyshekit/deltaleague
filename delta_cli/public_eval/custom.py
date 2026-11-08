@@ -18,6 +18,7 @@ def run(runner, tasks, generation, stream, progress):
     from lm_eval.api.model import LM
     from lm_eval.api.task import Task
     from lm_eval.config.task import TaskConfig
+    from lm_eval.tasks import TaskManager
 
     check_runtime()
     from langdetect import DetectorFactory
@@ -89,7 +90,8 @@ def run(runner, tasks, generation, stream, progress):
     task._config = TaskConfig(task='delta_custom', output_type='generate_until', num_fewshot=0,
                               generation_kwargs={'until': [], 'max_gen_toks': generation.get('max_tokens', 32768)})
     backend = LocalBackend()
-    report = text.evaluate_tasks(model=backend, tasks=[task], bootstrap_iters=0, log_samples=True,
+    report = text.evaluate_tasks(model=backend, tasks=[task], task_manager=TaskManager(include_defaults=False),
+        bootstrap_iters=0, log_samples=True,
         apply_chat_template=False, random_seed=1000, numpy_random_seed=1000, torch_random_seed=1000,
         fewshot_random_seed=1000)
     samples = report['samples']['delta_custom']
