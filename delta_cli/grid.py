@@ -101,6 +101,8 @@ def grid(workspace: Path = Path('.'), version: str | None = None,
         if config.get('protocol_version') == 'delta-public-v1' and validation_file is None:
             raise ValueError('Decoding grids require legacy workspace data or an explicit --validation file. '
                              'Use delta public-eval for the unchanged pinned public suite.')
+        from .public_eval.custom import check_runtime
+        check_runtime()
         validation_path = (validation_file or root / 'validation.json').resolve()
         tasks, names, full, validation_sha = local.public_examples(root, config, benchmark, limit,
             validation_file=validation_path if validation_file else None, samples=samples)
@@ -111,7 +113,7 @@ def grid(workspace: Path = Path('.'), version: str | None = None,
         if output_dir.exists() or partial.exists():
             raise ValueError(f'Output already exists: {output_dir} or {partial}. Choose a new --output-dir to preserve previous results.')
         effective = [({**generation_for(config, max_new_tokens, thinking), **cell_grid[name]}, len(tasks)) for name in selected]
-        limit_len = config['generation'].get('max_model_len', 34816)
+        limit_len = local.generation_settings(config).get('max_model_len', 34816)
         for name, (generation, _) in zip(selected, effective):
             if (tokens := generation.get('max_tokens', local.MAX_TOKENS)) >= limit_len:
                 raise ValueError(f"Cell '{name}' sets max_tokens {tokens}, at or above max_model_len {limit_len}.")

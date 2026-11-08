@@ -104,15 +104,13 @@ def test_public_scoring_averages_samples_then_problems_then_benchmarks(workspace
 
 
 def test_thinking_and_choice_scoring():
-    assert local.score_answer({'answer': 'yes'}, 'wrong reasoning</think> yes') == 1
+    from delta_cli.public_eval.generation import final_answer
+    assert local.score_answer({'answer': 'yes'}, final_answer('wrong reasoning</think> yes')) == 1
     assert local.score_answer({'answer': 'B', 'scorer': 'choice'}, r'Reasoning. \boxed{B}') == 1
     assert local.score_answer({'answer': '4', 'scorer': 'math'}, r'\boxed{4}') == 1
 
 
 def test_ifeval_scorer_and_unknown_scorer(monkeypatch):
-    import sys
-    import types
-
     class Instruction:
         def __init__(self, instruction_id):
             self.instruction_id = instruction_id
@@ -123,12 +121,8 @@ def test_ifeval_scorer_and_unknown_scorer(monkeypatch):
         def check_following(self, answer):
             return answer == 'yes'
 
-    registry = types.ModuleType('lm_eval.tasks.ifeval.instructions_registry')
-    registry.INSTRUCTION_DICT = {'plain': Instruction, 'prompted': Instruction}
-    for name in ('lm_eval', 'lm_eval.tasks', 'lm_eval.tasks.ifeval'):
-        if name not in sys.modules:
-            monkeypatch.setitem(sys.modules, name, types.ModuleType(name))
-    monkeypatch.setitem(sys.modules, 'lm_eval.tasks.ifeval.instructions_registry', registry)
+    from lm_eval.tasks.ifeval import instructions_registry
+    monkeypatch.setattr(instructions_registry, 'INSTRUCTION_DICT', {'plain': Instruction, 'prompted': Instruction})
     plain = {'scorer': 'ifeval', 'prompt': 'Say yes', 'instruction_id_list': ['plain'], 'kwargs': [{}]}
     assert local.score_answer(plain, 'yes') == 1
     assert local.score_answer(plain, 'no') == 0

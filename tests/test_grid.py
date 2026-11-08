@@ -197,6 +197,7 @@ def test_custom_baseline_name_is_reported(workspace, fake_runner):
 def test_custom_grid_samples_preserve_shared_report_contract(workspace, calls):
     root, _, config = workspace
     config['protocol_version'] = 'delta-public-v1'
+    config['generation']['public_validation'] = {'max_tokens': 20, 'temperature': .3, 'enable_thinking': False}
     (root / 'evaluation.json').write_text(json.dumps(config))
     (root / 'validation.json').write_text('{}')
     custom = root / 'custom.json'
@@ -213,6 +214,8 @@ def test_custom_grid_samples_preserve_shared_report_contract(workspace, calls):
         report = json.loads((out / (name + '.json')).read_text())
         rows = [json.loads(line) for line in (out / (name + '.generations.jsonl')).read_text().splitlines()]
         assert [r['seed'] for r in rows] == [1000, 1001, 1002]
+        assert report['evaluator'] == 'delta_cli.public_eval' and report['text_engine'] == 'lm-eval'
+        assert report['generation']['temperature'] == (.3 if name == 'default' else .8)
         assert report['samples_override'] == 3 and not report['full_validation_set']
         assert report['validation_sha256'] == file_hash(custom)
         assert summary['effective_generation'][name] == report['generation']
