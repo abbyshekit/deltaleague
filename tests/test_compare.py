@@ -273,3 +273,16 @@ def test_round_trip_from_evaluate_reports(workspace, fake_runner):
     assert report['benchmarks']['a']['n'] == 2 and report['benchmarks']['a']['diff'] == 100
     assert report['benchmarks']['a']['baseline_truncation_rate'] == 1 and report['benchmarks']['a']['candidate_truncation_rate'] == 0
     assert report['baseline']['source_version_id'] == metadata['id'] and not report['generation_differs']
+
+
+def test_reports_from_different_evaluators_cannot_be_paired(tmp_path):
+    base = write_run(tmp_path, 'old', {'a': [[1]]})
+    candidate = write_run(tmp_path, 'new', {'a': [[1]]})
+    report = json.loads(candidate.read_text())
+    report.update(evaluator='delta_cli.public_eval', text_engine='lm-eval', text_engine_version='0.4.13',
+                  task_protocol='custom-json-v1')
+    candidate.write_text(json.dumps(report))
+    with pytest.raises(ValueError, match='different evaluators'):
+        compare.compare_reports(base, candidate)
+    base.write_text(json.dumps(report))
+    assert compare.compare_reports(base, candidate, resamples=1)['overall']['diff'] == 0
