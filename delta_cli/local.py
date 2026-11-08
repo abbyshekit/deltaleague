@@ -13,6 +13,14 @@ from .artifacts import file_hash, reconstruct, validate_manifest, verify_artifac
 from .scoring import score_answer
 
 
+def generation_settings(config):
+    """Use the versioned public generation profile when the workspace has one."""
+    generation = config['generation']
+    if config.get('protocol_version') == 'delta-public-v1':
+        return dict(generation.get('public_validation', generation))
+    return dict(generation)
+
+
 def read_workspace(workspace):
     workspace = Path(workspace).resolve()
     identity = json.loads((workspace / 'delta-workspace.json').read_text())
@@ -103,7 +111,7 @@ class Runner:
         from transformers import LogitsProcessor, LogitsProcessorList, set_seed
         torch = self.torch
         rendered = self.tokenizer.apply_chat_template([{'role': 'user', 'content': prompt}], tokenize=False,
-                    add_generation_prompt=True, enable_thinking=generation.get('enable_thinking', True))
+                    add_generation_prompt=True, enable_thinking=generation.get('enable_thinking', False))
         inputs = self.tokenizer(rendered, return_tensors='pt', add_special_tokens=False).to(self.device)
         prompt_length = inputs['input_ids'].shape[1]
         max_tokens = generation.get('max_tokens', 32768)
@@ -236,19 +244,6 @@ def example_means(rows):
 
 
 def evaluate(runner, tasks, generation, stream, progress):
-    rows, tokens, seconds, truncated = [], 0, 0, 0
-    for index, task in enumerate(tasks, 1):
-        result = runner.generate(task['example']['prompt'], generation, task['seed'])
-        score = score_answer(task['example'], result['text'])
-        row = {k: v for k, v in task.items() if k != 'example'}
-        row.update(example_id=task['example']['id'], score=score, **result)
-        rows.append({k: row[k] for k in ('benchmark', 'example_index', 'example_id', 'score', 'truncated', 'tokens')})
-        stream.write(json.dumps(row) + '\n')
-        stream.flush()
-        tokens += result['tokens']
-        seconds += result['generation_seconds']
-        truncated += result['truncated']
-        progress(index, len(tasks), task['benchmark'])
-    components = {name: statistics.mean(v['examples'].values()) * 100 for name, v in example_means(rows).items()}
-    return {'validation_score': statistics.mean(components.values()), 'validation_benchmarks': components,
-            'output_tokens': tokens, 'generation_seconds': seconds, 'truncation_rate': truncated / len(tasks)}
+    """Compatibility entry point into the shared evaluator's custom task adapter."""
+    from .public_eval.runner import evaluate_custom
+    return evaluate_custom(runner=runner, tasks=tasks, generation=generation, stream=stream, progress=progress)

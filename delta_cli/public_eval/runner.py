@@ -115,3 +115,13 @@ def evaluate_public(*, endpoint, model, tokenizer, content_hash, output, manifes
         raise
     finally:
         state_path.write_text(json.dumps(state, indent=2))
+
+
+def evaluate_custom(*, runner, tasks, generation, stream, progress):
+    """Evaluate custom JSON tasks with the same native text engine as public suites.
+
+    The supplied runner is an inference backend, not a scorer. Custom task results
+    are advisory and cannot be accepted as pinned public-suite evidence.
+    """
+    from .custom import run
+    return run(runner, tasks, generation, stream, progress)

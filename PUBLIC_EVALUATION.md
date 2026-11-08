@@ -251,3 +251,5 @@ Earlier configurations without this field preserve the non-thinking protocol.
 A workspace remains pinned; initialize a new workspace after the leaderboard
 switches configurations. The supplied content hash is still advisory and does not
 attest the endpoint. No private test data or private response cache is distributed.
+
+Custom JSON evaluation (`delta evaluate --validation FILE`) uses this package's shared text engine through an in-memory task adapter. The `[local]` extra pins the same `lm-eval` release and supplies Transformers inference. It does not run a second scoring loop in the CLI. Native suite tasks retain their benchmark-specific protocols; custom JSON data and its sample/grid overrides remain advisory and never produce pinned-suite evidence.
