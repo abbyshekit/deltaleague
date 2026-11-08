@@ -62,7 +62,11 @@ def load_grid(path=None):
             if key not in RULES:
                 raise ValueError(f"Unknown generation key '{key}' in cell '{name}'; allowed: {', '.join(sorted(RULES))}.")
             check_value(name, key, value)
-    return grid if any(not overrides for overrides in grid.values()) else {'default': {}, **grid}
+    if not any(not overrides for overrides in grid.values()):
+        if 'default' in seen:
+            raise ValueError('Cell name conflicts with the implicit default baseline.')
+        return {'default': {}, **grid}
+    return grid
 
 
 def select(grid, cells):
@@ -87,12 +91,19 @@ def grid(workspace: Path = Path('.'), version: str | None = None,
          benchmark: str | None = None, limit: int | None = typer.Option(None, min=1),
          max_new_tokens: int | None = typer.Option(None, min=1),
          thinking: bool | None = typer.Option(None, '--thinking/--no-thinking'),
+         validation_file: Path | None = typer.Option(None, '--validation'),
+         samples: int | None = typer.Option(None, min=1, max=16),
          grid_file: Path | None = typer.Option(None, '--grid'),
          cells: str | None = None, output_dir: Path = Path('grid-results')):
     """Evaluate one checkpoint under each decoding setting of a pre-registered grid. Local control, never an official score."""
     try:
         root, _, config, _ = local.read_workspace(workspace)
-        tasks, names, full = local.public_examples(root, config, benchmark, limit)
+        if config.get('protocol_version') == 'delta-public-v1' and validation_file is None:
+            raise ValueError('Decoding grids require legacy workspace data or an explicit --validation file. '
+                             'Use delta public-eval for the unchanged pinned public suite.')
+        validation_path = (validation_file or root / 'validation.json').resolve()
+        tasks, names, full, validation_sha = local.public_examples(root, config, benchmark, limit,
+            validation_file=validation_path if validation_file else None, samples=samples)
         cell_grid = load_grid(grid_file)
         default, selected = select(cell_grid, cells)
         output_dir = output_dir.resolve()
@@ -116,7 +127,9 @@ def grid(workspace: Path = Path('.'), version: str | None = None,
                     typer.echo(f'{label} [{index}/{total}] {bench}', err=True)
                 report = write_report(runner, details, config, tasks, names, full, limit, {**details['generation'], **cell_grid[name]},
                     partial / f'{name}.json', progress, recorded_output=output_dir / f'{name}.json',
-                    grid_cell=name, grid_overrides=cell_grid[name])
+                    grid_cell=name, grid_overrides=cell_grid[name], validation_sha256=validation_sha,
+                    validation_file=str(validation_path), validation_kind='custom' if validation_file else 'workspace',
+                    samples_override=samples)
                 rows.append({'name': name, 'overrides': cell_grid[name], 'report': str(output_dir / f'{name}.json'),
                              **{k: report[k] for k in ('validation_score', 'validation_benchmarks', 'truncation_rate', 'output_tokens')}})
             best = best_cell(rows, default)
@@ -124,7 +137,11 @@ def grid(workspace: Path = Path('.'), version: str | None = None,
             summary = {'local_only': True, **{k: details[k] for k in ('model_id', 'config_id', 'source_version_id', 'artifact')},
                        'grid_sha256': grid_sha256, 'preregistered': preregistered, 'cells_requested': selected, 'cells': rows,
                        'default_cell': default, 'best_cell': best, 'best_minus_default': score[best] - score[default],
-                       'selected_benchmarks': names, 'examples_per_benchmark_limit': limit, 'note': NOTE}
+                       'selected_benchmarks': names, 'examples_per_benchmark_limit': limit,
+                       'validation_sha256': validation_sha, 'validation_file': str(validation_path),
+                       'samples_override': samples,
+                       'effective_generation': {name: generation for name, (generation, _) in zip(selected, effective)},
+                       'note': NOTE + ' Best-cell selection uses the same data; confirm gains on separate data.'}
             with (partial / 'grid-summary.json').open('x') as stream:
                 json.dump(summary, stream, indent=2)
         partial.rename(output_dir)

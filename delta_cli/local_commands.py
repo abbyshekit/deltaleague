@@ -41,6 +41,7 @@ def write_report(runner, details, config, tasks, names, full, limit, generation,
     return report
 
 
+
 def fail(exc):
     if isinstance(exc, ImportError):
         typer.echo('Local inference dependencies are missing. Install the CLI with pip install ".[local]"; IFEval also needs ".[ifeval]".', err=True)
@@ -104,19 +105,55 @@ def evaluate(workspace: Path = Path('.'), version: str | None = None,
              benchmark: str | None = None, limit: int | None = typer.Option(None, min=1),
              max_new_tokens: int | None = typer.Option(None, min=1),
              thinking: bool | None = typer.Option(None, '--thinking/--no-thinking'),
-             output: Path = Path('local-results.json')):
-    """Evaluate public validation. --limit caps examples per benchmark; output is never an official score."""
+             samples: int | None = typer.Option(None, min=1, max=16),
+             validation_file: Path | None = typer.Option(None, '--validation'),
+             output: Path = Path('local-results.json'),
+             endpoint: str | None = None, served_model: str = 'candidate',
+             content_hash: str | None = None, tokenizer: Path | None = None,
+             concurrency: int = typer.Option(32, min=1, max=256)):
+    """Evaluate public validation; advisory only. Pinned suites need --endpoint and --content-hash.
+
+    Limits, checkpoint selectors and generation overrides apply only to legacy configurations.
+    """
     try:
         root, _, config, _ = local.read_workspace(workspace)
-        tasks, names, full = local.public_examples(root, config, benchmark, limit)
+        if validation_file and (endpoint or content_hash or tokenizer):
+            raise ValueError('--validation uses local inference; do not combine it with endpoint options.')
+        if config.get('protocol_version') == 'delta-public-v1' and validation_file is None:
+            if samples is not None:
+                raise ValueError('--samples is only supported for legacy/custom local evaluations, not the pinned public suite.')
+            if not endpoint or not content_hash:
+                raise ValueError('This configuration uses the pinned public evaluator. Supply --endpoint and '
+                                 '--content-hash for your served checkpoint, or use `delta public-eval run --help`. '
+                                 'See PUBLIC_EVALUATION.md for the isolated runtime setup.')
+            if version or weights or patch or benchmark or limit or max_new_tokens is not None or thinking is not None:
+                raise ValueError('The pinned evaluator uses the complete frozen suite and its own generation settings. '
+                                 'Serve your chosen checkpoint first; use --content-hash to identify it.')
+            if local.file_hash(root / 'validation.json') != config['validation_sha256']:
+                raise ValueError('Public validation data changed; initialize a fresh workspace.')
+            from .public_eval.cli import run_command
+            run_command(endpoint=endpoint, model=served_model, tokenizer=tokenizer or root / 'model',
+                        content_hash=content_hash, manifest=root / 'validation.json', concurrency=concurrency,
+                        output=Path('public-results') if output == Path('local-results.json') else output,
+                        evaluation_config=root / 'evaluation.json')
+            return
+        if endpoint or content_hash or tokenizer:
+            raise ValueError('Endpoint evaluation requires a delta-public-v1 configuration.')
+        path = (validation_file or root / 'validation.json').resolve()
+        tasks, names, full, sha = local.public_examples(root, config, benchmark, limit,
+                                                      validation_file=path if validation_file else None, samples=samples)
         output = output.resolve()
-        if output.exists() or local.generations_path(output).exists():
+        generations = local.generations_path(output)
+        if output.exists() or generations.exists():
             raise ValueError('Output already exists. Choose a new --output path to preserve previous results.')
         output.parent.mkdir(parents=True, exist_ok=True)
-        budget_line([(generation_for(config, max_new_tokens, thinking), len(tasks))])
+        budget = max_new_tokens or config['generation'].get('max_tokens', 32768)
+        typer.echo(f'{len(tasks)} generations; up to {len(tasks) * budget:,} output tokens. Use --limit and --max-new-tokens for a quick check.', err=True)
         with experiment(workspace, version, weights, patch, device, max_new_tokens, thinking) as (runner, details):
             report = write_report(runner, details, config, tasks, names, full, limit, details['generation'], output,
-                lambda index, total, name: typer.echo(f'[{index}/{total}] {name}', err=True))
+                lambda index, total, name: typer.echo(f'[{index}/{total}] {name}', err=True),
+                validation_sha256=sha, validation_file=str(path),
+                validation_kind='custom' if validation_file else 'workspace', samples_override=samples)
             typer.echo(json.dumps(report, indent=2))
             typer.echo(f'Saved {output}', err=True)
     except (ImportError, OSError, ValueError, KeyError, RuntimeError) as exc:

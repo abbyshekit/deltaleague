@@ -2,6 +2,12 @@
 
 Local inference uses Transformers and PyTorch. Apple Silicon Macs select MPS, Linux machines with a compatible PyTorch GPU build select CUDA, and other machines use CPU. `--device cpu`, `--device mps`, or `--device cuda` overrides selection. There is no rented compute, server evaluation quota, or automatic submission involved.
 
+For the current `delta-public-v1` competition suite, follow
+[PUBLIC_EVALUATION.md](PUBLIC_EVALUATION.md). Its frozen public evaluation uses a
+served checkpoint and a separate environment. The `delta run` instructions below
+work in current workspaces; all `delta evaluate` examples below apply only to
+legacy flat-example configurations. They do not accept the current grouped suite.
+
 ## Install
 
 From the CLI repository, in a Python 3.12+ virtual environment:
@@ -49,7 +55,7 @@ delta evaluate --patch submission --limit 2 --max-new-tokens 256 --output patch-
 
 `--weights` takes a full modified safetensors checkpoint, using the workspace parent's tokenizer and configuration. `--patch` takes a submission directory with `manifest.json`; it checks the parent and artifact hashes, then reconstructs supported LoRA/sparse/dense/full artifacts into a temporary checkpoint. Neither changes the parent. You can combine either with `--version` when editing that leaderboard checkpoint; a patch must reference that exact version. Temporary reconstructed files need disk space roughly equal to a full checkpoint and are removed on completion.
 
-## Evaluate public validation
+## Evaluate legacy public validation
 
 Start small:
 
@@ -59,12 +65,24 @@ delta evaluate --limit 2 --max-new-tokens 256 --output baseline-quick.json
 
 `--limit` selects the first N problems **per benchmark**; `--benchmark gsm8k` selects one benchmark. These are development checks, not representative estimates of the full public score.
 
+`--samples K` runs every example K times (seeds 1000 to 1000+K−1) and averages, which cuts per-example noise for local comparisons; it is recorded in the report as `samples_override`, sets `full_validation_set` to false, and never changes an official score.
+
 For the entire public set with its configured generation settings:
 
 ```sh
 delta evaluate --output baseline-full.json
 delta evaluate --weights edited.safetensors --output edit-full.json
 ```
+
+To evaluate your own items (a held-out set, extra samples), pass `--validation FILE` in the `validation.json` format, where `scorer` is `exact`, `choice`, `math` or `ifeval` and `samples` defaults to 1:
+
+```json
+{"my-set": [{"id": "q1", "prompt": "What is 2 + 2?", "answer": "4", "scorer": "math", "samples": 2}]}
+```
+
+Every item needs `id` and `prompt`. `exact`, `choice` and `math` also need `answer` (a non-empty string or a number); `ifeval` needs `instruction_id_list` and a same-length `kwargs` list of objects instead, and no `answer`.
+
+The report's `validation_sha256` is the hash of that file, `validation_file` records its path, and `full_validation_set` is false. `--benchmark` and `--limit` still apply.
 
 Full evaluation can be expensive locally: the starter configuration permits 32,768 generated tokens per example. The CLI prints the number of generations and upper token budget before loading the model. Use Ctrl-C to interrupt. Completed generation records remain in the JSONL file; no complete score report is written for an interrupted run. Choose a fresh output filename to rerun; automatic resume is not implemented.
 
@@ -76,16 +94,41 @@ Scores remain **advisory local results**. Transformers, vLLM, device precision, 
 
 ## Compare two runs
 
+For the current public evaluator:
+
+```sh
+delta compare baseline-results/result.json candidate-results/result.json --output compare.json
+```
+
+Both reports must contain the complete pinned suite. The command pairs by
+benchmark/item ID, validates suite and checkpoint identities, and recomputes
+scores from the items. Generation sidecars are unnecessary; token and truncation
+summaries and `generation_differs` are `null` because the contract does not provide
+those comparisons. See [PUBLIC_EVALUATION.md](PUBLIC_EVALUATION.md).
+
+For legacy local reports:
+
 ```sh
 delta compare baseline-quick.json edit-quick.json --output compare.json
 delta compare baseline-quick.json edit-quick.json --resamples 10000 --seed 0 --json
 ```
 
-`compare` reads two `delta evaluate` reports and the `<report>.generations.jsonl` file beside each. Sample scores are averaged per example, then examples are paired by position within each benchmark. It refuses reports with a different `config_id`, `validation_sha256`, or `model_id`, and reports whose benchmark or example sets differ; rerun both with the same `--limit` and `--benchmark`. Different `generation` settings are allowed and flagged `generation_differs`, so decoding changes can be compared.
+For this legacy format, `compare` reads two `delta evaluate` reports and the `<report>.generations.jsonl` file beside each. Sample scores are averaged per example, then examples are paired by position within each benchmark. It refuses reports with a different `config_id`, `validation_sha256`, or `model_id`, and reports whose benchmark or example sets differ; rerun both with the same `--limit` and `--benchmark`. Different `generation` settings are allowed and flagged `generation_differs`, so decoding changes can be compared.
 
-Per benchmark it reports `n`, both means, the difference, a paired percentile bootstrap 95% interval (examples resampled with replacement; `--resamples` defaults to 10,000, `--seed` to 0), wins, losses, and ties of the candidate, an exact two-sided sign test on the discordant pairs, truncation rates, mean output tokens, and `run_worst_case_se`, the worst-case standard error of one run's mean, `50/sqrt(n)` points. The overall difference uses the platform's equal-weight mean of benchmark means, bootstrapped jointly by resampling within each benchmark; its `run_worst_case_se` is `100 * sqrt(sum(0.25 / n_b)) / B` points for `B` benchmarks. The verdict always adds that two runs separate at about 2.8 times this value (`1.96 * sqrt(2)`). The overall result also carries pooled `wins`, `losses`, `ties`, and an exact two-sided `sign_test_p` across all paired examples, and is `separable` only when its interval excludes 0 and `sign_test_p` is below 0.05.
+Per benchmark it reports `n`, both means, the difference, a paired percentile bootstrap 95% interval (examples resampled with replacement; `--resamples` defaults to 10,000, `--seed` to 0), wins, losses, and ties of the candidate, an exact two-sided sign test on the discordant pairs, truncation rates, mean output tokens, and `run_worst_case_se`, the worst-case standard error of one run's mean, `50/sqrt(n)` points. The overall difference uses the platform's equal-weight mean of benchmark means, bootstrapped jointly by resampling within each benchmark; its `run_worst_case_se` is `100 * sqrt(sum(0.25 / n_b)) / B` points for `B` benchmarks. The displayed `1.96 * sqrt(2)` multiple is an independence-based unpaired uncertainty band, not a significance threshold for the paired comparison. The overall result also carries pooled `wins`, `losses`, `ties`, and an exact two-sided `sign_test_p` across all paired examples, and is `separable` only when its interval excludes 0, `sign_test_p` is below 0.05, and pooled wins/losses agree with the direction of the benchmark-weighted difference (`pooled_sign_agrees`). This is an exploratory screen, not a calibrated test of the weighted mean: pooled signs give each item equal weight, while the aggregate gives each benchmark equal weight. Intervals assume independent items within benchmarks and do not account for repeated candidate selection or run-to-run generation variability. A negative screen is not evidence of equivalence.
 
 `--json` prints the full structure and `--output` writes it; an existing output file is never overwritten. The comparison is advisory: official validation and private test scores are authoritative.
+
+A custom `--validation` file is evaluated with local inference even when the
+workspace's official configuration uses `delta-public-v1`. It does not replace
+or modify the pinned public suite. Do not combine `--validation` with `--endpoint`,
+`--content-hash` or `--tokenizer`; those select the pinned external-server path.
+Custom reports record `validation_kind: custom`, the file path and the hash of
+the exact bytes parsed, and always set `full_validation_set: false`.
+
+`--samples` applies to legacy workspace data and custom `--validation` files.
+It is rejected for the pinned public suite. For a custom file, its exact hash and
+`samples_override` are both recorded, and `full_validation_set` remains false.
 
 ## Decoding grid
 
@@ -113,3 +156,13 @@ A custom grid is a JSON object `{"cell": {"key": value}}`. Allowed keys: `temper
 `grid_sha256` in the summary is the SHA-256 of the grid as `json.dumps(grid, sort_keys=True, separators=(',', ':'))`. `preregistered` is true only when the grid equals the built-in table above, and the hash is printed before the run and recorded in the summary, so a grid can be committed to (for example in a research PR) before scores exist.
 
 Cost is cells × a full evaluation: the default grid runs six. Use `--limit`, `--cells` and `--max-new-tokens` for a quick check; the CLI prints the generation count and token ceiling before loading the model.
+
+Grids are for legacy workspace data or explicit custom `--validation FILE` data.
+The pinned public suite is rejected before model loading. Custom files may also
+use `--samples K`; every cell records the file hash and sample override, and
+custom/sample-overridden runs never claim full official validation coverage.
+`grid-summary.json` records effective generation settings for every selected cell;
+the grid hash alone commits only relative overrides. The best cell was selected
+on the evaluation data, so confirm any gain on separate data before treating it
+as evidence of generalization. Failing to beat this reference does not establish
+what mechanism a weight edit uses.

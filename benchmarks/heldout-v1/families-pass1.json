@@ -1,0 +1,136 @@
+{
+  "families": [
+    {
+      "name": "arc_fresh",
+      "scorer": "choice",
+      "letter": true,
+      "numeric": false,
+      "target": 100,
+      "batchesPerRound": 4,
+      "topics": [
+        "planetary motion and seasons",
+        "weathering, erosion and rock cycle",
+        "food webs and energy flow",
+        "states of matter and phase changes",
+        "simple machines and forces",
+        "electric circuits",
+        "plant reproduction and adaptations",
+        "the water cycle and weather fronts",
+        "heredity and traits",
+        "sound and light waves",
+        "chemical vs physical changes",
+        "human body systems",
+        "ecosystems and human impact",
+        "magnetism",
+        "scientific method and experimental design",
+        "density, buoyancy and mass",
+        "the solar system and moon phases",
+        "cells and microorganisms",
+        "renewable energy and conservation",
+        "heat transfer"
+      ],
+      "spec": "Grade-school and middle-school science multiple-choice questions in the style of ARC-Challenge: a short stem (one to four sentences, sometimes a scenario) followed by exactly four options labelled A. B. C. D. on separate lines. Exactly one option is correct by established science; the distractors are plausible misconceptions, not jokes.",
+      "answerRules": "Canonical answer: the single letter of the correct option (A, B, C or D). In \"body\", put the stem, then a newline, then the four options as lines starting \"A. \", \"B. \", \"C. \", \"D. \". Rotate which letter is correct across the batch roughly evenly.",
+      "programRule": "Leave \"program\" empty.",
+      "criticRule": "the correct option is correct by established science and every distractor is wrong, with no option that is also defensible",
+      "examples": [
+        {
+          "body": "An astronomer observes that a planet rotates faster after a meteorite impact. Which is the most likely effect of this increase in rotation?\nA. Planetary density will decrease.\nB. Planetary years will become longer.\nC. Planetary days will become shorter.\nD. Planetary gravity will become stronger.",
+          "answer": "C"
+        },
+        {
+          "body": "A group of engineers wanted to know how different building designs would respond during an earthquake. They made several models of buildings and tested each for its ability to withstand earthquake conditions. Which will most likely result from testing different building designs?\nA. buildings will be built faster\nB. buildings will be made safer\nC. building designs will look nicer\nD. building materials will be cheaper",
+          "answer": "B"
+        }
+      ]
+    },
+    {
+      "name": "gsm_fresh",
+      "scorer": "math",
+      "letter": false,
+      "numeric": true,
+      "target": 100,
+      "batchesPerRound": 4,
+      "topics": [
+        "shopping with discounts",
+        "rates and travel time",
+        "fractions of a group",
+        "money earned over days",
+        "percent increase and decrease",
+        "recipes and scaling",
+        "ages now and later",
+        "schedules and durations in minutes",
+        "sharing and remainders",
+        "unit conversion (cups, metres, grams)",
+        "average of several quantities",
+        "savings goals and weeks",
+        "garden rows and plants",
+        "ticket sales",
+        "sports scores and totals",
+        "work rates (two people)",
+        "temperature changes",
+        "distance round trips",
+        "library books and loans",
+        "packing boxes and leftovers"
+      ],
+      "spec": "Grade-school math word problems in the style of GSM8K: two to eight sentences, everyday settings, requiring two to eight arithmetic steps, with a single numeric final answer. No trick questions, no ambiguity about what is asked.",
+      "answerRules": "Canonical answer: a single number with no units, no commas, no currency symbol (integer when the answer is a whole number; otherwise a decimal). Every quantity needed must be stated in the body.",
+      "programRule": "\"program\" MUST be a self-contained Python function `def solve():` that computes and returns the answer as a number from the stated quantities, with no input and no imports beyond math.",
+      "criticRule": "the arithmetic in the proposed answer is correct and every needed quantity is stated",
+      "examples": [
+        {
+          "body": "Janet’s ducks lay 16 eggs per day. She eats three for breakfast every morning and bakes muffins for her friends every day with four. She sells the remainder at the farmers' market daily for $2 per fresh duck egg. How much in dollars does she make every day at the farmers' market?",
+          "answer": "18"
+        },
+        {
+          "body": "A robe takes 2 bolts of blue fiber and half that much white fiber.  How many bolts in total does it take?",
+          "answer": "3"
+        }
+      ]
+    },
+    {
+      "name": "math_fresh",
+      "scorer": "math",
+      "letter": false,
+      "numeric": false,
+      "target": 100,
+      "batchesPerRound": 4,
+      "topics": [
+        "prealgebra: fractions and ratios",
+        "algebra: linear and quadratic equations",
+        "number theory: divisibility and remainders",
+        "counting and probability",
+        "geometry: triangles and circles",
+        "intermediate algebra: polynomials and inequalities",
+        "precalculus: trigonometry and vectors",
+        "sequences and series",
+        "functions and their inverses",
+        "coordinate geometry",
+        "modular arithmetic",
+        "combinatorics with restrictions",
+        "exponents and logarithms",
+        "area and volume",
+        "complex numbers",
+        "systems of equations",
+        "absolute value and piecewise",
+        "prime factorisation",
+        "expected value",
+        "polynomial roots (Vieta)"
+      ],
+      "spec": "Competition-style math problems in the style of the MATH dataset (levels 2 to 5), one to five sentences, LaTeX for mathematics, with a single exact final answer (a number, expression, interval, ordered pair, or similar) that a strict symbolic grader can check.",
+      "answerRules": "Canonical answer: the exact final value in LaTeX as the MATH dataset writes it (e.g. \\frac{3}{4}, 2\\sqrt{2}, (3, \\frac{\\pi}{2}), 17, x^2+1), fully simplified, with no \\boxed, no units, no words. Do not ask for approximations or for answers 'to two decimal places'.",
+      "programRule": "\"program\" should be a short Python snippet using sympy that evaluates to the answer (assign the result to a variable named `result`), or empty if not expressible.",
+      "criticRule": "the proposed answer is exactly right and in a form math-verify would accept, and the problem is well-posed at competition standard",
+      "examples": [
+        {
+          "body": "Convert the point $(0,3)$ in rectangular coordinates to polar coordinates.  Enter your answer in the form $(r,\\theta),$ where $r > 0$ and $0 \\le \\theta < 2 \\pi.$",
+          "answer": "\\left( 3, \\frac{\\pi}{2} \\right)"
+        },
+        {
+          "body": "Define\n\\[p = \\sum_{k = 1}^\\infty \\frac{1}{k^2} \\quad \\text{and} \\quad q = \\sum_{k = 1}^\\infty \\frac{1}{k^3}.\\]Find a way to write\n\\[\\sum_{j = 1}^\\infty \\sum_{k = 1}^\\infty \\frac{1}{(j + k)^3}\\]in terms of $p$ and $q.$",
+          "answer": "p - q"
+        }
+      ]
+    }
+  ]
+}

@@ -1,4 +1,5 @@
 import json
+import math
 
 import pytest
 from typer.testing import CliRunner
@@ -28,6 +29,25 @@ def write_run(root, name, scores, generation=None, config_id='tiny-v1', model_id
 
 def flat(n, value, benchmarks=('a',)):
     return {b: [[value]] * n for b in benchmarks}
+
+
+def test_sign_test_matches_the_binomial_tail_for_small_and_large_samples():
+    def slow(wins, losses):
+        n = wins + losses
+        if not n:
+            return 1.0
+        tail = sum(math.comb(n, i) for i in range(min(wins, losses) + 1))
+        return min(1.0, 2 * tail / 2 ** n)
+
+    for wins, losses in [(0, 0), (0, 5), (3, 3), (1, 20), (20, 1), (8, 7)]:
+        assert compare.sign_test(wins, losses) == slow(wins, losses)
+    assert compare.sign_test(5000, 5000) == 1.0
+
+
+def test_control_characters_in_a_benchmark_name_are_rejected(tmp_path):
+    report = write_run(tmp_path, 'x', {'a\nsep': [[1]]})
+    with pytest.raises(ValueError, match='control characters'):
+        compare.load(report)
 
 
 def test_identical_runs_are_not_separable(tmp_path):
@@ -138,7 +158,10 @@ def test_worst_case_standard_errors(tmp_path):
     assert result['benchmarks']['a']['run_worst_case_se'] == pytest.approx(15.81, abs=.005)
     assert result['overall']['run_worst_case_se'] == pytest.approx(9.13, abs=.005)
     tied = compare.compare_reports(write_run(tmp_path, 'p', flat(10, 1, 'abc')), write_run(tmp_path, 'q', flat(10, 1, 'abc')), resamples=50)
-    assert "Worst-case standard error of one run's mean: 9.13 points; two runs separate at about 2.8\u00d7 that (25.30 points)." in compare.render(tied)
+    text = compare.render(tied)
+    assert "Worst-case standard error of one run's mean: 9.13 points" in text
+    assert 'independence-based unpaired 95% band: 25.30 points' in text
+    assert 'not a threshold for this paired comparison' in text
 
 
 def test_generation_differs_flag(tmp_path):
@@ -168,6 +191,22 @@ def test_overall_is_mean_of_benchmark_means(tmp_path):
     assert overall['diff'] == pytest.approx(50)
     assert overall['baseline_mean'] == pytest.approx(0)
     assert overall['candidate_mean'] == pytest.approx(50)
+
+
+def test_opposite_pooled_signs_do_not_certify_macro_gain(tmp_path):
+    base = {'small_a': [[0]] * 10, 'small_b': [[0]] * 10, 'large': [[1]] * 100}
+    cand = {'small_a': [[1]] * 10, 'small_b': [[1]] * 10, 'large': [[0]] * 100}
+    result = compare.compare_reports(write_run(tmp_path, 'x', base), write_run(tmp_path, 'y', cand), resamples=50)
+    overall = result['overall']
+    assert overall['diff'] > 0 and overall['ci95'][0] > 0
+    assert overall['sign_test_p'] < .05 and overall['losses'] > overall['wins']
+    assert not overall['pooled_sign_agrees'] and not overall['separable']
+
+
+@pytest.mark.parametrize('resamples', [0, -1, True, 1.5])
+def test_invalid_resample_count_fails_before_reading_reports(resamples):
+    with pytest.raises(ValueError, match='positive integer'):
+        compare.compare_reports('unused', 'unused', resamples=resamples)
 
 
 def test_mismatched_model_id_and_validation_hash_are_refused(tmp_path):

@@ -192,3 +192,47 @@ def test_custom_baseline_name_is_reported(workspace, fake_runner):
     assert result.exit_code == 0, result.output
     assert json.loads((root / 'g/grid-summary.json').read_text())['default_cell'] == 'base'
     assert 'Best: hot 100.0 (+100.0 over base)' in result.output
+
+
+def test_custom_grid_samples_preserve_shared_report_contract(workspace, calls):
+    root, _, config = workspace
+    config['protocol_version'] = 'delta-public-v1'
+    (root / 'evaluation.json').write_text(json.dumps(config))
+    (root / 'validation.json').write_text('{}')
+    custom = root / 'custom.json'
+    custom.write_text(json.dumps({'probe': [{'id': 'x', 'prompt': 'P', 'answer': 'yes'}]}))
+    out = root / 'custom-grid'
+    result = CliRunner().invoke(main.app, ['grid', '--workspace', str(root), '--validation', str(custom),
+        '--samples', '3', '--cells', 'temp-0.8', '--max-new-tokens', '4', '--output-dir', str(out)])
+    assert result.exit_code == 0, result.output
+    from delta_cli.artifacts import file_hash
+    from delta_cli.compare import compare_reports
+    summary = json.loads((out / 'grid-summary.json').read_text())
+    assert summary['validation_sha256'] == file_hash(custom) and summary['samples_override'] == 3
+    for name in ['default', 'temp-0.8']:
+        report = json.loads((out / (name + '.json')).read_text())
+        rows = [json.loads(line) for line in (out / (name + '.generations.jsonl')).read_text().splitlines()]
+        assert [r['seed'] for r in rows] == [1000, 1001, 1002]
+        assert report['samples_override'] == 3 and not report['full_validation_set']
+        assert report['validation_sha256'] == file_hash(custom)
+        assert summary['effective_generation'][name] == report['generation']
+    compared = compare_reports(out / 'default.json', out / 'temp-0.8.json', resamples=10)
+    assert compared['generation_differs']
+
+
+def test_pinned_grid_rejected_before_model_loading(workspace, monkeypatch):
+    root, _, config = workspace
+    config['protocol_version'] = 'delta-public-v1'
+    (root / 'evaluation.json').write_text(json.dumps(config))
+    from delta_cli import local
+    monkeypatch.setattr(local, 'Runner', lambda *args: pytest.fail('Pinned suite must not load local model'))
+    result = CliRunner().invoke(main.app, ['grid', '--workspace', str(root)])
+    assert result.exit_code == 1 and 'explicit --validation file' in result.output
+    assert 'inventory mismatch' not in result.output
+
+
+def test_implicit_baseline_cannot_collide_with_case_variant(tmp_path):
+    path = tmp_path / 'grid.json'
+    path.write_text(json.dumps({'DEFAULT': {'temperature': .8}}))
+    with pytest.raises(ValueError, match='implicit default'):
+        load_grid(path)
