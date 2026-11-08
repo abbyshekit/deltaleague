@@ -1,5 +1,6 @@
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
@@ -513,9 +514,58 @@ def results(submission: str, json_output: bool = typer.Option(False, "--json")):
     typer.echo("\n".join(lines) if lines else json.dumps(result, indent=2))
 
 
+Z = 1.96
+
+
+def plain(text, width):
+    return re.sub(r"[\x00-\x1f\x7f-\x9f]", "?", str(text))[:width]
+
+
+def render_board(board):
+    """Plain-text leaderboard: test scores with standard errors and each scored row's gap to the top scored row."""
+    num = lambda v: "—" if v is None else f"{v:.2f}"
+    ok = lambda v: isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+    table, scored = [["rank", "name", "submitter", "validation", "test ± se", "gap to top"]], []
+    for r in board["rows"]:
+        res = r.get("result") or {}
+        test, se = res.get("test_score"), (res.get("stats") or {}).get("test_standard_error")
+        test_ok, se_ok = ok(test), ok(se) and se >= 0
+        who = "original" if r.get("parent_id") is None else plain((r.get("submitter") or {}).get("username") or "—", 24)
+        name = plain(r.get("name") or "—", 40)
+        rank = r.get("rank")
+        vscore = res.get("validation_score")
+        table.append(["—" if rank is None else str(rank), name, who, num(vscore if ok(vscore) else None),
+                      (num(test) if test_ok else "—") + (f" ± {se:.2f}" if se_ok else ""), "—"])
+        if res.get("state") == "complete" and test_ok:
+            scored.append((len(table) - 1, test, se if se_ok else None))
+    if scored:
+        top = max(scored, key=lambda s: s[1])
+        for i, test, se in scored:
+            if i != top[0]:
+                gap = test - top[1]
+                table[i][5] = f"{gap:+.2f}" + (" *" if se is not None and top[2] is not None
+                                                  and abs(gap) <= Z * math.hypot(se, top[2]) else "")
+    widths = [max(map(len, col)) for col in zip(*table)]
+    lines = ["  ".join(c.ljust(w) for c, w in zip(row, widths)).rstrip() for row in table]
+    if not any(se is not None for _, _, se in scored):
+        return "\n".join(lines + ["", "No standard errors reported."])
+    if len(scored) < 2:
+        return "\n".join(lines)
+    return "\n".join(lines + ["",
+        "* gap within 1.96·√(se_row² + se_top²), an independence-based heuristic. Rows share test items, so their paired difference can be resolved more tightly than this band.",
+        "Inside the band is not evidence two rows are equal; outside it is conservative only when per-item results are non-negatively correlated."])
+
+
 @app.command()
-def leaderboard(model: str | None = None):
-    show(call("GET", "leaderboard", params={"model": model} if model else {}))
+def leaderboard(model: str | None = None,
+                table: bool = typer.Option(False, "--table", help="Print scores with standard errors and each row's gap to the top scored row.")):
+    if table and not model:
+        raise typer.BadParameter("--table needs --model: rows are compared within one competition.")
+    board = call("GET", "leaderboard", params={"model": model} if model else {})
+    if table:
+        typer.echo(render_board(board))
+    else:
+        show(board)
 
 
 app.command("run")(run)
